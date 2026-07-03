@@ -452,7 +452,12 @@ function renderRiskRadar(rid, compareIds){
         lineStyle:{width:2.5}, areaStyle:{opacity:.25},
       }];
     }
-    _radarChart.setOption({
+    // 评分总和(横向比较用):每个 series.value 是 6 维分数数组
+    const seriesSums = series.map(s => (s.value||[]).reduce((a,b)=>a+(b||0),0));
+    const showTitle = series.length === 1;  // 单风险才显示角标,多风险用 legend 避免遮挡
+    const showLegend = series.length >= 2;  // 对比模式才显示 legend
+
+    const option = {
       tooltip: { trigger:'item', backgroundColor:'rgba(20,29,46,.95)',
                  borderColor:'#3d8bff', textStyle:{color:'#dfe7f3',fontSize:11} },
       radar: {
@@ -463,9 +468,34 @@ function renderRiskRadar(rid, compareIds){
         splitLine:{lineStyle:{color:'#2c3a55'}},
         splitArea:{areaStyle:{color:['rgba(61,139,255,.02)','rgba(61,139,255,.05)']}},
         axisLine:{lineStyle:{color:'#2c3a55'}},
+        // 给右上角 legend 留出空间
+        ...(showLegend ? {center:['50%','54%'], radius:'62%'} : {}),
       },
       series:[{ type:'radar', data:series, symbolSize:5 }],
-    });
+    };
+
+    // 对比模式:可点击 legend,切换显示/隐藏某条风险
+    if(showLegend){
+      option.legend = {
+        data: series.map(s=>s.name),
+        bottom: 0,
+        textStyle:{color:'#8ea0bd', fontSize:10},
+        itemWidth: 12, itemHeight: 8, itemGap: 14,
+        inactiveColor:'#445270',
+      };
+    }
+    // 单风险:左上角角标显示 总分/均值,方便横向比较
+    if(showTitle){
+      const sum = seriesSums[0];
+      const avg = Math.round(sum / (series[0].value||[]).length);
+      option.title = {
+        text: `Σ ${sum}  ·  均 ${avg}`,
+        left: 6, top: 0,
+        textStyle:{color:'#3d8bff', fontSize:11, fontWeight:600},
+        subtextStyle:{color:'#8ea0bd', fontSize:9},
+      };
+    }
+    _radarChart.setOption(option);
   }).catch(e=> console.warn('radar fetch failed', e));
 }
 
