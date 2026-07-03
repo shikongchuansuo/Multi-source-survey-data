@@ -1,0 +1,227 @@
+[
+  {
+    "id": "ZK1",
+    "xy": [
+      55,
+      405
+    ],
+    "mileage": "K12+050",
+    "elevation": 995.2,
+    "depth_m": 18.0,
+    "water_depth_m": 6.5,
+    "layers": [
+      {
+        "top": 0,
+        "bottom": 4,
+        "lithology": "种植土",
+        "color": "#6b4f2a",
+        "desc": "褐色，松散，含植物根系"
+      },
+      {
+        "top": 4,
+        "bottom": 7,
+        "lithology": "碎石土",
+        "color": "#a08060",
+        "desc": "坡洪积，稍密，碎石含量约60%"
+      },
+      {
+        "top": 7,
+        "bottom": 12,
+        "lithology": "全风化花岗岩",
+        "color": "#c8a878",
+        "desc": "呈砂土状，可塑"
+      },
+      {
+        "top": 12,
+        "bottom": 18,
+        "lithology": "弱风化花岗岩",
+        "color": "#8a8a90",
+        "desc": "岩体较完整，RQD=65%"
+      }
+    ]
+  },
+  {
+    "id": "ZK2",
+    "xy": [
+      180,
+      462
+    ],
+    "mileage": "K12+180",
+    "elevation": 1012.4,
+    "depth_m": 22.0,
+    "water_depth_m": null,
+    "layers": [
+      {
+        "top": 0,
+        "bottom": 3,
+        "lithology": "粉质粘土",
+        "color": "#7a5a3a",
+        "desc": "硬塑，含少量碎石"
+      },
+      {
+        "top": 3,
+        "bottom": 22,
+        "lithology": "弱风化花岗岩",
+        "color": "#8a8a90",
+        "desc": "岩体较完整，节理不发育"
+      }
+    ]
+  },
+  {
+    "id": "ZK3",
+    "xy": [
+      410,
+      560
+    ],
+    "mileage": "K12+380",
+    "elevation": 1048.6,
+    "depth_m": 25.0,
+    "water_depth_m": 8.2,
+    "layers": [
+      {
+        "top": 0,
+        "bottom": 2,
+        "lithology": "坡积碎石",
+        "color": "#a08060",
+        "desc": "松散，含块石"
+      },
+      {
+        "top": 2,
+        "bottom": 8,
+        "lithology": "强风化碎裂花岗岩",
+        "color": "#b89868",
+        "desc": "碎裂结构，裂隙发育，含裂隙水"
+      },
+      {
+        "top": 8,
+        "bottom": 15,
+        "lithology": "弱风化花岗岩",
+        "color": "#8a8a90",
+        "desc": "节理较发育，RQD=45%"
+      },
+      {
+        "top": 15,
+        "bottom": 25,
+        "lithology": "微风化花岗岩",
+        "color": "#707078",
+        "desc": "岩体完整，RQD=80%"
+      }
+    ]
+  },
+  {
+    "id": "ZK4",
+    "xy": [
+      475,
+      600
+    ],
+    "mileage": "K12+450",
+    "elevation": 1065.1,
+    "depth_m": 23.0,
+    "water_depth_m": 9.0,
+    "layers": [
+      {
+        "top": 0,
+        "bottom": 3,
+        "lithology": "含碎石粉质粘土",
+        "color": "#7a5a3a",
+        "desc": "稍湿，可塑"
+      },
+      {
+        "top": 3,
+        "bottom": 9,
+        "lithology": "强风化花岗岩",
+        "color": "#b89868",
+        "desc": "碎裂状，含卸荷裂隙"
+      },
+      {
+        "top": 9,
+        "bottom": 16,
+        "lithology": "弱风化花岗岩",
+        "color": "#8a8a90",
+        "desc": "节理发育，RQD=50%"
+      },
+      {
+        "top": 16,
+        "bottom": 23,
+        "lithology": "微风化花岗岩",
+        "color": "#707078",
+        "desc": "完整，RQD=82%"
+      }
+    ]
+  },
+  {
+    "id": "ZK5",
+    "xy": [
+      620,
+      350
+    ],
+    "mileage": "K12+620",
+    "elevation": 1003.7,
+    "depth_m": 20.0,
+    "water_depth_m": null,
+    "layers": [
+      {
+        "top": 0,
+        "bottom": 4,
+        "lithology": "粉质粘土",
+        "color": "#7a5a3a",
+        "desc": "硬塑"
+      },
+      {
+        "top": 4,
+        "bottom": 20,
+        "lithology": "弱风化花岗岩",
+        "color": "#8a8a90",
+        "desc": "较完整，RQD=70%"
+      }
+    ]
+  },
+  {
+    "id": "ZK6",
+    "xy": [
+      715,
+      385
+    ],
+    "mileage": "K12+720",
+    "elevation": 998.3,
+    "depth_m": 28.0,
+    "water_depth_m": 2.1,
+    "layers": [
+      {
+        "top": 0,
+        "bottom": 3,
+        "lithology": "粉质粘土",
+        "color": "#7a5a3a",
+        "desc": "饱和，软塑"
+      },
+      {
+        "top": 3,
+        "bottom": 8,
+        "lithology": "全风化花岗岩",
+        "color": "#c8a878",
+        "desc": "砂土状，饱水"
+      },
+      {
+        "top": 8,
+        "bottom": 15,
+        "lithology": "弱风化花岗岩",
+        "color": "#8a8a90",
+        "desc": "节理发育"
+      },
+      {
+        "top": 15,
+        "bottom": 22,
+        "lithology": "破碎带",
+        "color": "#5a4030",
+        "desc": "构造角砾岩，RQD=22%，富水"
+      },
+      {
+        "top": 22,
+        "bottom": 28,
+        "lithology": "弱风化花岗岩",
+        "color": "#8a8a90",
+        "desc": "较完整"
+      }
+    ]
+  }
+]

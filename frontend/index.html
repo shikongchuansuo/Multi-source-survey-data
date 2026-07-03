@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多源勘察数据联动展示与证据链追溯系统</title>
+<link rel="stylesheet" href="/lib/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<!-- 顶部栏 -->
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">◈</div>
+    <div class="title-block">
+      <h1>多源勘察数据联动展示与证据链追溯系统</h1>
+      <p class="subtitle">空天地多源数据融合 · 风险证据链决策平台 · <span id="scenario">XX 铁路隧道 K12+000~K13+000</span></p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <div class="layer-toggles">
+      <span class="lbl">图层：</span>
+      <label><input type="checkbox" id="lyr-ortho" checked> 正射影像</label>
+      <label><input type="checkbox" id="lyr-dem"> DEM高程</label>
+      <label><input type="checkbox" id="lyr-route" checked> 线路</label>
+      <label><input type="checkbox" id="lyr-bh" checked> 钻孔</label>
+      <label><input type="checkbox" id="lyr-geo" checked> 物探测线</label>
+      <label><input type="checkbox" id="lyr-risk" checked> 风险区</label>
+    </div>
+    <div class="filter-box">
+      <select id="risk-filter">
+        <option value="">全部风险等级</option>
+        <option value="高">高</option>
+        <option value="中高">中高</option>
+        <option value="中">中</option>
+      </select>
+    </div>
+  </div>
+</header>
+
+<!-- 主工作区 -->
+<div class="workspace">
+  <!-- 左：2D 地图/影像 -->
+  <section class="panel map-panel">
+    <div class="panel-head"><span class="ph-icon">🗺️</span><span>正射影像 / 多源空间要素</span>
+      <span class="ph-hint" id="map-coord">坐标：—</span>
+    </div>
+    <div id="map"></div>
+    <div class="map-legend">
+      <div class="lg-item"><span class="dot risk-high"></span>高风险</div>
+      <div class="lg-item"><span class="dot risk-midhigh"></span>中高风险</div>
+      <div class="lg-item"><span class="dot risk-mid"></span>中风险</div>
+      <div class="lg-item"><span class="dot borehole"></span>钻孔</div>
+      <div class="lg-item"><span class="line geo"></span>物探测线</div>
+    </div>
+  </section>
+
+  <!-- 中：3D 点云 -->
+  <section class="panel three-panel">
+    <div class="panel-head"><span class="ph-icon">🏔️</span><span>三维点云 / 地形</span>
+      <span class="ph-hint" id="three-info">点云：加载中…</span>
+    </div>
+    <div id="three-container"></div>
+    <div class="three-toolbar">
+      <button id="btn-flyto" title="定位到当前选中风险区">🎯 定位风险区</button>
+      <button id="btn-reset" title="重置视角">⟲ 重置视角</button>
+      <button id="btn-slope" title="切换坡度/高程着色">🎨 坡度着色</button>
+    </div>
+  </section>
+
+  <!-- 右：证据链面板 -->
+  <section class="panel evidence-panel">
+    <div class="panel-head"><span class="ph-icon">🔗</span><span>多源证据链</span>
+      <span class="ph-hint" id="ev-target">未选中</span>
+    </div>
+    <div id="evidence-content" class="evidence-content">
+      <div class="empty-state">
+        <div class="empty-icon">👆</div>
+        <p>点击地图上的<span class="hl">风险区域</span></p>
+        <p class="sub">系统将联动 3D 点云、物探剖面、钻孔、报告，呈现完整证据链</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- 底部：里程轴 + 问答/报告 -->
+<footer class="bottombar">
+  <div class="mileage-axis">
+    <div class="axis-label">里程</div>
+    <div class="axis-track" id="mileage-track"></div>
+  </div>
+  <div class="bottom-tabs">
+    <button class="tab active" data-tab="interpret">📋 风险解释</button>
+    <button class="tab" data-tab="qa">💬 智能对话</button>
+    <button class="tab" data-tab="report">📑 报告生成</button>
+  </div>
+  <div class="bottom-body">
+    <!-- 风险解释 -->
+    <div class="tab-pane active" id="pane-interpret">
+      <div class="interp-empty">选择风险区域后，将在此显示综合风险解释与设计建议。</div>
+    </div>
+    <!-- 智能对话 -->
+    <div class="tab-pane" id="pane-qa">
+      <div class="qa-header">
+        <span class="qa-status" id="qa-status">● 在线 · 本地 NLU 引擎</span>
+        <span class="qa-session" id="qa-session">会话：demo</span>
+      </div>
+      <div id="qa-output" class="qa-output"></div>
+      <div class="qa-suggest" id="qa-suggest">
+        <span class="qs-label">快捷指令：</span>
+      </div>
+      <div class="qa-input-row">
+        <input type="text" id="qa-input" placeholder="输入指令，如「带我去 K12+380」「坡度>30度的风险」「R001 和 R002 哪个高」">
+        <button id="qa-send">发送 ➤</button>
+      </div>
+    </div>
+    <!-- 报告生成 -->
+    <div class="tab-pane" id="pane-report">
+      <div class="report-bar">
+        <span class="rb-label">报告范围：</span>
+        <select id="report-scope">
+          <option value="full">📋 全线综合报告</option>
+          <option value="risk">🎯 单风险报告</option>
+        </select>
+        <select id="report-select" style="display:none"></select>
+        <span class="rb-label">格式：</span>
+        <select id="report-fmt">
+          <option value="docx">📄 Word (.docx)</option>
+          <option value="md">📝 Markdown (.md)</option>
+          <option value="html">🌐 HTML (.html)</option>
+        </select>
+        <button id="report-gen">⚡ 生成预览</button>
+        <a id="report-download" class="btn-link" href="#" target="_blank">⬇ 下载文件</a>
+      </div>
+      <div id="report-output" class="report-output">
+        <div class="report-empty">
+          选择报告范围和格式，点击「生成预览」查看内容，或直接「下载文件」。<br>
+          <span style="font-size:11px;opacity:.7">支持 Word/Markdown/HTML 三种格式，Word 报告内嵌物探剖面图与钻孔柱状图。</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<!-- 浮动：数据源清单 -->
+<div class="data-sources-fab" id="ds-fab" title="多源数据接入">📊</div>
+<div class="data-sources-panel" id="ds-panel">
+  <div class="ds-head">多源勘察数据接入 <span class="ds-close" id="ds-close">×</span></div>
+  <div id="ds-list" class="ds-list"></div>
+</div>
+
+<!-- 加载遮罩 -->
+<div class="loading-overlay" id="loading">
+  <div class="spinner"></div>
+  <p>正在加载多源勘察数据…</p>
+</div>
+
+<!-- 三方库 -->
+<script src="/lib/echarts/echarts.min.js"></script>
+<script src="/lib/three/three.min.js"></script>
+<script src="/lib/three/OrbitControls.js"></script>
+<script src="/lib/three/PLYLoader.js"></script>
+<script src="/lib/leaflet/leaflet.js"></script>
+<!-- markdown 渲染 -->
+<script src="/static/marked.min.js"></script>
+<!-- 应用 -->
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,393 @@
+{
+  "project": {
+    "name": "多源勘察数据联动展示与证据链追溯系统",
+    "subtitle": "空天地多源勘察数据融合展示与风险证据链决策平台",
+    "scenario": "XX 铁路隧道 K12+000 ~ K13+000 (示范案例)",
+    "coordinate_note": "工程局部坐标系 (X 米向东, Y 米向北)，区域 1000m × 800m",
+    "mileage_note": "里程 K12+000~K13+000 对应 X = 0~1000m"
+  },
+  "route": {
+    "type": "tunnel",
+    "name": "XX 铁路隧道 (K12+000 ~ K13+000)",
+    "start_mileage": "K12+000",
+    "end_mileage": "K13+000",
+    "portal_in": {
+      "mileage": "K12+000",
+      "xy": [
+        0.0,
+        400.0
+      ],
+      "label": "出口/明洞口"
+    },
+    "portal_out": {
+      "mileage": "K13+000",
+      "xy": [
+        1000.0,
+        419.28362829059614
+      ],
+      "label": "进口/洞口"
+    },
+    "centerline": [
+      {
+        "mileage_m": 12000,
+        "xy": [
+          0,
+          400.0
+        ]
+      },
+      {
+        "mileage_m": 12050,
+        "xy": [
+          50,
+          410.2606042997701
+        ]
+      },
+      {
+        "mileage_m": 12100,
+        "xy": [
+          100,
+          419.2836282905962
+        ]
+      },
+      {
+        "mileage_m": 12150,
+        "xy": [
+          150,
+          425.98076211353316
+        ]
+      },
+      {
+        "mileage_m": 12200,
+        "xy": [
+          200,
+          429.5442325903662
+        ]
+      },
+      {
+        "mileage_m": 12250,
+        "xy": [
+          250,
+          429.5442325903662
+        ]
+      },
+      {
+        "mileage_m": 12300,
+        "xy": [
+          300,
+          425.98076211353316
+        ]
+      },
+      {
+        "mileage_m": 12350,
+        "xy": [
+          350,
+          419.2836282905962
+        ]
+      },
+      {
+        "mileage_m": 12400,
+        "xy": [
+          400,
+          410.2606042997701
+        ]
+      },
+      {
+        "mileage_m": 12450,
+        "xy": [
+          450,
+          400.0
+        ]
+      },
+      {
+        "mileage_m": 12500,
+        "xy": [
+          500,
+          389.73939570023
+        ]
+      },
+      {
+        "mileage_m": 12550,
+        "xy": [
+          550,
+          380.7163717094038
+        ]
+      },
+      {
+        "mileage_m": 12600,
+        "xy": [
+          600,
+          374.01923788646684
+        ]
+      },
+      {
+        "mileage_m": 12650,
+        "xy": [
+          650,
+          370.4557674096338
+        ]
+      },
+      {
+        "mileage_m": 12700,
+        "xy": [
+          700,
+          370.4557674096338
+        ]
+      },
+      {
+        "mileage_m": 12750,
+        "xy": [
+          750,
+          374.01923788646684
+        ]
+      },
+      {
+        "mileage_m": 12800,
+        "xy": [
+          800,
+          380.7163717094038
+        ]
+      },
+      {
+        "mileage_m": 12850,
+        "xy": [
+          850,
+          389.7393957002299
+        ]
+      },
+      {
+        "mileage_m": 12900,
+        "xy": [
+          900,
+          400.0
+        ]
+      },
+      {
+        "mileage_m": 12950,
+        "xy": [
+          950,
+          410.2606042997701
+        ]
+      },
+      {
+        "mileage_m": 13000,
+        "xy": [
+          1000,
+          419.28362829059614
+        ]
+      }
+    ]
+  },
+  "dem": {
+    "meta": "dem/meta.json",
+    "image": "dem/dem.png"
+  },
+  "orthophoto": {
+    "meta": "orthophoto/meta.json",
+    "image": "orthophoto/orthophoto.png"
+  },
+  "pointcloud": {
+    "meta": "pointcloud/meta.json",
+    "file": "pointcloud/terrain.ply"
+  },
+  "geophysics_lines": "geophysics/lines.json",
+  "boreholes": "boreholes/boreholes.json",
+  "report": "report/survey_report.json",
+  "risk_objects": [
+    {
+      "id": "R001",
+      "name": "K12+380 洞口段边坡失稳区",
+      "mileage": "K12+380",
+      "mileage_m": 12380.0,
+      "type": "slope_instability",
+      "type_cn": "洞口边坡失稳",
+      "risk_level": "高",
+      "confidence": "高",
+      "polygon_xy": [
+        [
+          360,
+          500
+        ],
+        [
+          510,
+          500
+        ],
+        [
+          520,
+          640
+        ],
+        [
+          350,
+          640
+        ]
+      ],
+      "center_xy": [
+        430,
+        565
+      ],
+      "evidence": {
+        "image": "冲沟发育、坡面大面积裸露岩土、圈椅状地形痕迹；植被不连续",
+        "pointcloud": "最大坡度约 38°，相对高差约 52m，坡面存在拉裂陡坎",
+        "geophysics": "高密度电法剖面 H1-H1'：浅部存在低阻异常带 (ρ<200Ω·m)，推断为含水松动岩体",
+        "borehole": "ZK3 揭示：0-8m 为碎裂状强风化花岗岩，8-15m 弱风化含裂隙水",
+        "report": "《XX隧道工程地质勘察报告》6.3 节：该洞口段边坡存在卸荷裂隙与古滑坡迹象，雨季易发生表层滑塌",
+        "params": {
+          "max_slope_deg": 38,
+          "relief_m": 52,
+          "rho_min": 180,
+          "weathered_depth_m": 8
+        }
+      },
+      "interpretation": "该区位于隧道进口段，正射影像显示冲沟发育、坡面裸露、圈椅状地貌；三维点云提取最大坡度 38°、相对高差 52m，存在拉裂陡坎；高密度电法 H1-H1' 剖面浅部低阻异常 (180Ω·m)，钻孔 ZK3 揭示 0-8m 强风化碎裂花岗岩并含裂隙水；勘察报告明确指出存在卸荷裂隙与古滑坡迹象。综合判定为洞口边坡失稳高风险，建议：① 进洞前进行边坡刷方减载与锚网喷支护；② 完善截排水天沟与坡面排水；③ 施工期加强坡体水平位移与深部位移监测，必要时增设抗滑桩。",
+      "design_suggestion": "建议洞口采用长管棚超前支护 + 边坡锚网喷 + 截排水天沟，坡脚布设 3 根抗滑桩 (1.5m×2m，桩长 18m)；施工期监测水平位移阈值 10mm。",
+      "geophysics_line": "L1",
+      "borehole_ids": [
+        "ZK3",
+        "ZK4"
+      ]
+    },
+    {
+      "id": "R002",
+      "name": "K12+720 富水破碎带",
+      "mileage": "K12+720",
+      "mileage_m": 12720.0,
+      "type": "water_rich_fracture",
+      "type_cn": "富水破碎带",
+      "risk_level": "中高",
+      "confidence": "中高",
+      "polygon_xy": [
+        [
+          660,
+          320
+        ],
+        [
+          780,
+          320
+        ],
+        [
+          790,
+          440
+        ],
+        [
+          650,
+          440
+        ]
+      ],
+      "center_xy": [
+        720,
+        380
+      ],
+      "evidence": {
+        "image": "植被异常茂密、地形低洼汇水，可见季节性水系汇集",
+        "pointcloud": "地形低洼带，相对周边低约 6-8m，呈沟槽状",
+        "geophysics": "高密度电法剖面 L2-L2'：深部存在明显低阻带 (ρ<150Ω·m)，宽度约 25m，推断含水破碎带",
+        "borehole": "ZK6 揭示：地下水位埋深 2.1m，15-22m 段岩芯破碎 RQD<25%，渗透系数偏大",
+        "report": "《XX隧道工程地质勘察报告》7.1 节：该段存在富水构造，施工可能发生突水突泥风险",
+        "params": {
+          "rho_min": 130,
+          "water_depth_m": 2.1,
+          "fracture_width_m": 25,
+          "rqd_pct": 22
+        }
+      },
+      "interpretation": "该区位于隧道洞身浅埋段，影像显示植被异常茂密、地形低洼汇水；点云显示沟槽状低洼地貌；高密度电法 L2-L2' 剖面深部存在宽约 25m 低阻带 (130Ω·m)；钻孔 ZK6 揭示地下水位埋深仅 2.1m，15-22m 岩芯破碎 RQD=22%；勘察报告提示突水突泥风险。综合判定为富水破碎带中高风险，建议：① 超前地质预报 (TSP + 地质雷达 + 超前钻孔) 全过程跟进；② 超前帷幕注浆封堵地下水；③ 备用抽排水能力 ≥200m³/h；④ 设置防水闸门。",
+      "design_suggestion": "建议采用超前帷幕注浆 (加固圈 5m) + 双层初期支护，预留注浆管；施工配备 200m³/h 抽排水能力，洞口设防水闸门。",
+      "geophysics_line": "L2",
+      "borehole_ids": [
+        "ZK6"
+      ]
+    },
+    {
+      "id": "R003",
+      "name": "K12+050 缓坡松散堆积区",
+      "mileage": "K12+050",
+      "mileage_m": 12050.0,
+      "type": "loose_deposit",
+      "type_cn": "松散堆积",
+      "risk_level": "中",
+      "confidence": "中",
+      "polygon_xy": [
+        [
+          10,
+          350
+        ],
+        [
+          120,
+          350
+        ],
+        [
+          130,
+          470
+        ],
+        [
+          5,
+          470
+        ]
+      ],
+      "center_xy": [
+        65,
+        410
+      ],
+      "evidence": {
+        "image": "扇形堆积地貌，植被稀疏，色调浅",
+        "pointcloud": "坡度平缓 (8-12°)，表面起伏，堆积特征明显",
+        "geophysics": "剖面 L3-L3'：表层视电阻率梯度变化，浅部松散层厚约 6-9m",
+        "borehole": "ZK1 揭示：0-7m 为碎石土堆积，下伏基岩面起伏",
+        "report": "报告 5.2 节：隧道出口段覆盖层为坡洪积碎石土，承载力较低",
+        "params": {
+          "avg_slope_deg": 10,
+          "deposit_depth_m": 7
+        }
+      },
+      "interpretation": "该区为隧道出口段缓坡，影像显示扇形堆积地貌、植被稀疏；点云显示坡度平缓 (8-12°)、表面起伏；物探反映浅部松散层厚 6-9m；钻孔 ZK1 揭示 0-7m 碎石土堆积。综合判定为松散堆积中风险，建议：明洞段基础采用换填或钻孔灌注桩，避免不均匀沉降。",
+      "design_suggestion": "明洞基础采用 1.5m 换填碎石 + φ1.2m 钻孔灌注桩 (间距 4m，嵌岩 3m)。",
+      "geophysics_line": "L3",
+      "borehole_ids": [
+        "ZK1"
+      ]
+    }
+  ],
+  "data_sources": [
+    {
+      "type": "正射影像/卫星影像",
+      "icon": "image",
+      "purpose": "地表环境、地貌、植被、水系判断",
+      "file": "orthophoto/orthophoto.png"
+    },
+    {
+      "type": "三维点云/DEM",
+      "icon": "mountain",
+      "purpose": "坡度、高差、坡面形态、地形突变",
+      "file": "pointcloud/terrain.ply"
+    },
+    {
+      "type": "线路/里程数据",
+      "icon": "route",
+      "purpose": "把所有数据统一到工程对象上",
+      "file": "manifest.json#route"
+    },
+    {
+      "type": "物探剖面",
+      "icon": "wave",
+      "purpose": "低阻异常、破碎带、含水异常",
+      "file": "geophysics/lines.json"
+    },
+    {
+      "type": "钻孔资料",
+      "icon": "drill",
+      "purpose": "地层、岩性、地下水、破碎程度验证",
+      "file": "boreholes/boreholes.json"
+    },
+    {
+      "type": "勘察报告/文本",
+      "icon": "doc",
+      "purpose": "风险描述、设计建议、支护要求",
+      "file": "report/survey_report.json"
+    },
+    {
+      "type": "风险标注",
+      "icon": "warning",
+      "purpose": "核心案例，作为多源证据链载体",
+      "file": "manifest.json#risk_objects"
+    }
+  ]
+}

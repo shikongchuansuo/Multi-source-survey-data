@@ -1,0 +1,19 @@
+{
+  "ncols": 500,
+  "nrows": 400,
+  "cell": 2.0,
+  "extent": {
+    "xmin": 0,
+    "ymin": 0,
+    "xmax": 1000,
+    "ymax": 800
+  },
+  "elevation": {
+    "min": 920.3641618244143,
+    "max": 1134.3373640698085
+  },
+  "image": "dem/dem.png",
+  "png_w": 500,
+  "png_h": 400,
+  "world_file": "dem/dem.pgw"
+}

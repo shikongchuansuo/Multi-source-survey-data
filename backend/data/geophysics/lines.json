@@ -1,0 +1,59 @@
+[
+  {
+    "id": "L1",
+    "name": "H1-H1' 洞口边坡剖面",
+    "related_risk": "R001",
+    "start_xy": [
+      350,
+      500
+    ],
+    "end_xy": [
+      520,
+      640
+    ],
+    "length_m": 220,
+    "method": "高密度电法",
+    "rho_min": 20.0,
+    "anomaly_depth_m": 8,
+    "image": "geophysics/L1.png",
+    "csv": "geophysics/L1.csv"
+  },
+  {
+    "id": "L2",
+    "name": "H2-H2' 富水破碎带剖面",
+    "related_risk": "R002",
+    "start_xy": [
+      650,
+      320
+    ],
+    "end_xy": [
+      790,
+      440
+    ],
+    "length_m": 185,
+    "method": "高密度电法",
+    "rho_min": 53.83120554931044,
+    "anomaly_depth_m": 18,
+    "image": "geophysics/L2.png",
+    "csv": "geophysics/L2.csv"
+  },
+  {
+    "id": "L3",
+    "name": "H3-H3' 松散堆积剖面",
+    "related_risk": "R003",
+    "start_xy": [
+      10,
+      350
+    ],
+    "end_xy": [
+      130,
+      470
+    ],
+    "length_m": 165,
+    "method": "高密度电法",
+    "rho_min": 20.0,
+    "anomaly_depth_m": 7,
+    "image": "geophysics/L3.png",
+    "csv": "geophysics/L3.csv"
+  }
+]

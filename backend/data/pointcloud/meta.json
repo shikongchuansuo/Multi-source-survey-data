@@ -1,0 +1,16 @@
+{
+  "file": "pointcloud/terrain.ply",
+  "format": "ply",
+  "point_count": 82944,
+  "extent": {
+    "xmin": 0,
+    "ymin": 0,
+    "xmax": 1000,
+    "ymax": 800
+  },
+  "elevation_range": {
+    "min": 920.4784536475006,
+    "max": 1134.0061240867358
+  },
+  "color_coding": "坡度着色 (绿=缓坡，黄=中等，红=陡坡)"
+}

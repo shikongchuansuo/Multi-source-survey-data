@@ -1,0 +1,13 @@
+{
+  "image": "orthophoto/orthophoto.png",
+  "extent": {
+    "xmin": 0,
+    "ymin": 0,
+    "xmax": 1000,
+    "ymax": 800
+  },
+  "png_w": 500,
+  "png_h": 400,
+  "world_file": "orthophoto/orthophoto.pgw",
+  "desc": "无人机正射影像 (DOM)，分辨率 2m/像素，模拟真彩色"
+}
