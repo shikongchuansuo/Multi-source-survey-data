@@ -32,6 +32,8 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)   # 兼容 uvicorn backend.app:app 启动
 import nlu  # 自然语言理解与对话引擎（同包模块）
 import report_gen  # 报告生成引擎（Word/Markdown/HTML）
+import profile as profile_mod  # 沿线地质剖面分析
+import structures3d  # 三维地质结构数据
 DATA = os.path.join(HERE, "data")
 FRONTEND = os.path.join(os.path.dirname(HERE), "frontend")
 
@@ -162,6 +164,46 @@ def get_geophysics(lid: Optional[str] = None):
             raise HTTPException(404, f"物探测线 {lid} 不存在")
         return g
     return {"lines": GEO_LINES}
+
+
+@app.get("/api/geophysics/{lid}/grid")
+def get_geophysics_grid(lid: str):
+    """返回物探电阻率网格数据，供 ECharts 热力图。
+    返回 {stations, depths, data:[[station_idx, depth_idx, rho],...], rho_min, rho_max, anomaly}"""
+    import csv as _csv
+    g = GEO_BY_ID.get(lid)
+    if not g:
+        raise HTTPException(404, f"物探测线 {lid} 不存在")
+    csv_path = os.path.join(DATA, g["csv"])
+    if not os.path.exists(csv_path):
+        raise HTTPException(404, "物探 CSV 数据不存在")
+    rows = []
+    with open(csv_path, "r", encoding="utf-8-sig") as f:
+        reader = _csv.DictReader(f)
+        for r in reader:
+            rows.append((float(r["station_m"]), float(r["depth_m"]), float(r["rho_ohm_m"])))
+    # 构建去重轴
+    stations = sorted(set(r[0] for r in rows))
+    depths = sorted(set(r[1] for r in rows))
+    sta_idx = {s: i for i, s in enumerate(stations)}
+    dep_idx = {d: i for i, d in enumerate(depths)}
+    data = []
+    rho_vals = []
+    for s, d, rho in rows:
+        data.append([sta_idx[s], dep_idx[d], round(rho, 1)])
+        rho_vals.append(rho)
+    rho_min = round(min(rho_vals), 1)
+    rho_max = round(max(rho_vals), 1)
+    return {
+        "line": g,
+        "stations": [round(s, 1) for s in stations],
+        "depths": [round(d, 1) for d in depths],
+        "data": data,
+        "rho_min": rho_min,
+        "rho_max": rho_max,
+        "anomaly": {"x": g["length_m"] / 2, "depth": g["anomaly_depth_m"],
+                    "rho": g["rho_min"]},
+    }
 
 
 # ----------------------------------------------------------------------------
@@ -451,6 +493,58 @@ def risk_scores(rid: Optional[str] = None):
                        s["borehole"], s["groundwater"], s["level"]],
         })
     return {"dimensions": dims, "risks": series}
+
+
+# ----------------------------------------------------------------------------
+# 10) 沿线地质纵剖面 (隧道工程核心图：地形+隧道+钻孔+风险统一在里程轴)
+# ----------------------------------------------------------------------------
+@app.get("/api/profile/route")
+def get_route_profile():
+    """沿线路地质纵剖面：地表高程、隧道设计高程、埋深、钻孔投影、风险区段。"""
+    return profile_mod.compute_route_profile()
+
+
+# ----------------------------------------------------------------------------
+# 11) 三维地质结构 (隧道轴线/钻孔分层柱/异常体，与点云同坐标系融合)
+# ----------------------------------------------------------------------------
+@app.get("/api/3d/structures")
+def get_3d_structures():
+    """三维地质结构数据，供前端 Three.js 与点云融合渲染。"""
+    return structures3d.build_3d_structures()
+
+
+@app.get("/api/3d/terrain")
+def get_3d_terrain(step: int = 4):
+    """DEM 地形网格（降采样），供前端构建带正射影像纹理的 3D 地形面。
+    step: 每 step 个 DEM 像素取一个采样点（默认 4 -> 125x100 网格）。
+    返回 {step, ncols, nrows, elevations:[[...]], texture:'orthophoto路径',
+          extent, coord_offset}"""
+    import numpy as np
+    # 用 structures3d 的 DEM 网格（已构建）
+    Z = structures3d._Z  # shape (NROWS=400, NCOLS=500)，行0=Y=0(南)
+    NROWS, NCOLS = Z.shape
+    s = max(2, int(step))
+    # 降采样
+    sub = Z[::s, ::s]   # 行=Y，列=X
+    out_rows, out_cols = sub.shape
+    # 转 JSON：行序需让前端从北(Y大)到南或反之明确。这里返回原始（行0=Y=0=南）
+    elev = []
+    for r in range(out_rows):
+        row = []
+        for c in range(out_cols):
+            row.append(round(float(sub[r, c]), 1))
+        elev.append(row)
+    return {
+        "step": s,
+        "ncols": out_cols,    # X 方向采样点数
+        "nrows": out_rows,    # Y 方向采样点数
+        "elevations": elev,   # [row=Y_idx][col=X_idx]，Y 从南(0)到北
+        "cell": s * structures3d.CELL,  # 采样后每格的米数
+        "extent": {"xmin": 0, "ymin": 0, "xmax": 1000, "ymax": 800},
+        "texture": MANIFEST["orthophoto"]["image"],
+        "coord_offset": {"x": 500, "y": 400, "z": 950},
+        "note": "elevations[row][col]，row 对应 Y(0=南,nrows-1=北)，col 对应 X(0=东0,ncols-1=东1000)",
+    }
 
 
 if __name__ == "__main__":

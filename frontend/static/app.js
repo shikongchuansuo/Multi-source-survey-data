@@ -210,15 +210,17 @@ function initThree(){
   const container = $('#three-container');
   const W = container.clientWidth, H = container.clientHeight;
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x0a0f1a, 600, 1800);
+  scene.background = new THREE.Color(0x0c1322);
+  // 雾效：远处淡入背景，增强空间深度感
+  scene.fog = new THREE.Fog(0x0c1322, 800, 2200);
   STATE.three.scene = scene;
 
   const camera = new THREE.PerspectiveCamera(50, W/H, 1, 5000);
-  camera.position.set(620, -620, 560);
+  camera.position.set(750, -750, 650);
   camera.up.set(0,0,1);
   STATE.three.camera = camera;
 
-  const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+  const renderer = new THREE.WebGLRenderer({antialias:true, alpha:false});
   renderer.setSize(W, H);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   container.appendChild(renderer.domElement);
@@ -229,25 +231,126 @@ function initThree(){
   controls.target.set(0,0,0);
   STATE.three.controls = controls;
 
-  // 光照（点云用顶点色，但加点环境光让体感更好）
-  scene.add(new THREE.AmbientLight(0xffffff, .8));
-  const dl = new THREE.DirectionalLight(0xffffff, .6); dl.position.set(500,-500,800); scene.add(dl);
+  // --- 光照：半球光 + 三方向光，让地形有立体感与明暗层次 ---
+  const hemi = new THREE.HemisphereLight(0xb8d0ff, 0x3a2818, .55);
+  scene.add(hemi);
+  scene.add(new THREE.AmbientLight(0xffffff, .35));
+  // 主光（太阳，西南方向，高角度）
+  const sun = new THREE.DirectionalLight(0xfff4e0, .7);
+  sun.position.set(-400, 400, 800); scene.add(sun);
+  // 填充光（反方向，柔和）
+  const fill = new THREE.DirectionalLight(0x80a0ff, .3);
+  fill.position.set(500, -300, 400); scene.add(fill);
 
-  // 加载点云
+  // 加载点云 / 地形 / 地质结构
   loadPointCloud();
+  loadTerrainMesh();
+  loadGeoStructures();
 
-  // 坐标轴指示 (X红 Y绿 Z蓝)
-  const axes = new THREE.Group();
-  const axLen = 120;
-  const mkAxis = (dir,color)=>{
-    const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), dir.clone().multiplyScalar(axLen)]);
-    return new THREE.Line(g, new THREE.LineBasicMaterial({color}));
+  // --- 空间参考：两片透明网格十字交叉，把空间分8块，主展示正半轴(+X+Y+Z)区域 ---
+  // 数据范围：X[-500,500] Y[-400,400] Z[-30,150]。把交叉原点放在后下角(-500,-400,-30)，
+  // 这样地形/点云/隧道/钻孔全部落在 +X/+Y/+Z 的"正卦限"里展示。
+  // 面1：水平 XY 面（铺在 +X +Y 方向，Z 固定=-30 底面）
+  // 面2：垂直 XZ 面（沿 +X +Z 方向，Y 固定=-400 后边界）
+  // 两面在 Y=-400、Z=-30 的 X 轴线上十字交叉。
+  const OX=-500, OY=-400, OZ=-30;       // 交叉原点（后下左角）
+  const SX=1000, SY=800, SZ=180;        // 三个正方向的网格延伸长度
+  const gridGroup = new THREE.Group(); gridGroup.name = 'crossGrids';
+
+  // 通用：创建一个带网格线+半透明填充的面
+  function makeGridFace(width, height, wSeg, hSeg, lineColor, fillColor){
+    const g = new THREE.Group();
+    // 半透明填充（让"面"有实体感）
+    const fill = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, height),
+      new THREE.MeshBasicMaterial({color:fillColor, transparent:true, opacity:.10, side:THREE.DoubleSide, depthWrite:false})
+    );
+    // 网格线
+    const wire = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, height, wSeg, hSeg),
+      new THREE.MeshBasicMaterial({color:lineColor, wireframe:true, transparent:true, opacity:.45, depthWrite:false})
+    );
+    g.add(fill, wire);
+    return g;
+  }
+
+  // 面1：水平 XY 面（底面）。PlaneGeometry 默认在 XY 平面、中心在原点。
+  // 把它平移到正方向：中心在 (OX+SX/2, OY+SY/2, OZ)
+  const hFace = makeGridFace(SX, SY, 20, 16, 0xffffff, 0x2a4068);
+  hFace.position.set(OX+SX/2, OY+SY/2, OZ);
+  gridGroup.add(hFace);
+
+  // 面2：垂直 XZ 面（后边界，纵剖面）。PlaneGeometry 默认 XY，绕 X 轴转 90° 变 XZ。
+  // 旋转后宽=SX(X方向)、高=SZ(Z方向)，中心在 (OX+SX/2, OY, OZ+SZ/2)
+  const vFace = makeGridFace(SX, SZ, 20, 9, 0xffd080, 0x3a2a08);
+  vFace.rotation.x = Math.PI/2;          // XY -> XZ（立起来）
+  vFace.position.set(OX+SX/2, OY, OZ+SZ/2);
+  gridGroup.add(vFace);
+
+  scene.add(gridGroup);
+
+  // --- 坐标系：带标签的 3 轴 + 高程刻度（原点与网格交叉点对齐，指向正半轴）---
+  const coordGroup = new THREE.Group(); coordGroup.name = 'coordSystem';
+  const origin = new THREE.Vector3(OX, OY, OZ);  // 与网格交叉原点对齐
+  const axLen = 220;
+  // 三轴（加粗箭头）
+  const mkArrow = (dir, color)=>{
+    const arr = new THREE.ArrowHelper(dir, origin, axLen, color, 18, 12);
+    return arr;
   };
-  axes.add(mkAxis(new THREE.Vector3(1,0,0),0xff4d5e));
-  axes.add(mkAxis(new THREE.Vector3(0,1,0),0x3dd97a));
-  axes.add(mkAxis(new THREE.Vector3(0,0,1),0x3d8bff));
-  axes.position.set(-480, -360, 0);
-  scene.add(axes);
+  coordGroup.add(mkArrow(new THREE.Vector3(1,0,0), 0xff4d5e));   // X 红
+  coordGroup.add(mkArrow(new THREE.Vector3(0,1,0), 0x3dd97a));   // Y 绿
+  coordGroup.add(mkArrow(new THREE.Vector3(0,0,1), 0x3d8bff));   // Z 蓝
+  // 轴标签
+  coordGroup.add(makeTextSprite('X (东 E) / 里程', '#ff8090', origin.x+axLen+10, origin.y, origin.z));
+  coordGroup.add(makeTextSprite('Y (北 N)', '#5fe0a0', origin.x, origin.y+axLen+10, origin.z));
+  coordGroup.add(makeTextSprite('Z (高程 m)', '#7db0ff', origin.x-10, origin.y, origin.z+axLen+15));
+  // 高程刻度（Z 轴每 50m 一格，从 950 到 1100）
+  for(let elev=950; elev<=1100; elev+=50){
+    const z = elev - 950;
+    const tick = new THREE.Mesh(
+      new THREE.BoxGeometry(10, 2, 0.5),
+      new THREE.MeshBasicMaterial({color:0x5a7aaa})
+    );
+    tick.position.set(origin.x-5, origin.y, z);
+    coordGroup.add(tick);
+    coordGroup.add(makeTextSprite(elev+'m', '#8ea0bd', origin.x-35, origin.y, z, 32));
+  }
+  scene.add(coordGroup);
+
+  // --- 指北针（右上角浮于场景的 N 标记）---
+  const northGroup = new THREE.Group(); northGroup.name = 'compass';
+  const northArrow = new THREE.ArrowHelper(
+    new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), 80,
+    0xff4d5e, 25, 15
+  );
+  northGroup.add(northArrow);
+  northGroup.add(makeTextSprite('N', '#ff4d5e', 0, 90, 0, 48));
+  northGroup.position.set(480, -380, 200);  // 场景东南角上方
+  scene.add(northGroup);
+
+  // --- 比例尺（地表上的 100m 参考线段）---
+  const scaleGroup = new THREE.Group(); scaleGroup.name = 'scalebar';
+  const scaleMat = new THREE.LineBasicMaterial({color:0xffffff, linewidth:2});
+  const scalePts = [new THREE.Vector3(-450,-380,1), new THREE.Vector3(-350,-380,1)];
+  const scaleGeom = new THREE.BufferGeometry().setFromPoints(scalePts);
+  scaleGroup.add(new THREE.Line(scaleGeom, scaleMat));
+  // 端点小球
+  for(const p of scalePts){
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(3,8,6), new THREE.MeshBasicMaterial({color:0xffffff}));
+    dot.position.copy(p); scaleGroup.add(dot);
+  }
+  scaleGroup.add(makeTextSprite('100 m', '#ffffff', -400, -395, 1, 32));
+  scene.add(scaleGroup);
+
+  // --- 区域边界框（虚线，让空间范围一目了然）---
+  const bboxPts = [
+    [-500,-400,-30],[500,-400,-30],[500,400,-30],[-500,400,-30],[-500,-400,-30],
+  ].map(p=>new THREE.Vector3(p[0],p[1],p[2]));
+  const bboxGeom = new THREE.BufferGeometry().setFromPoints(bboxPts);
+  const bboxMat = new THREE.LineDashedMaterial({color:0x3a5070, dashSize:8, gapSize:6});
+  const bbox = new THREE.Line(bboxGeom, bboxMat); bbox.computeLineDistances();
+  scene.add(bbox);
 
   // 动画
   function animate(){
@@ -256,13 +359,24 @@ function initThree(){
     renderer.render(scene, camera);
   }
   animate();
+}
 
-  // 自适应
-  window.addEventListener('resize', ()=>{
-    const w = container.clientWidth, h = container.clientHeight;
-    camera.aspect = w/h; camera.updateProjectionMatrix();
-    renderer.setSize(w,h);
-  });
+// 生成文字精灵（始终面向相机的标签）
+function makeTextSprite(text, color, x, y, z, fontsize=40){
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.font = `bold ${fontsize}px Microsoft YaHei, sans-serif`;
+  ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,.9)'; ctx.shadowBlur = 6;
+  ctx.fillText(text, 128, 32);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  const mat = new THREE.SpriteMaterial({map:tex, transparent:true, depthTest:false});
+  const sp = new THREE.Sprite(mat);
+  sp.position.set(x, y, z);
+  sp.scale.set(60, 15, 1);
+  return sp;
 }
 
 function loadPointCloud(){
@@ -293,6 +407,174 @@ function loadPointCloud(){
     $('#three-info').textContent = '⚠ 点云加载失败';
     console.error(err);
   });
+}
+
+// ============================================================
+// 2a) 遥感影像 + DEM 3D 地形表面（多源融合的关键：把正射影像贴到地形上）
+// ============================================================
+function loadTerrainMesh(){
+  fetch('/api/3d/terrain?step=5').then(r=>r.json()).then(d=>{
+    const off = d.coord_offset;
+    const nc = d.ncols, nr = d.nrows;
+    const cell = d.cell;
+    // 区域尺寸（米）
+    const W = (nc-1)*cell, H = (nr-1)*cell;
+    // PlaneGeometry：默认在 XY 平面，宽 W 高 H，分段 nc-1 × nr-1
+    const geom = new THREE.PlaneGeometry(W, H, nc-1, nr-1);
+    // 设置每个顶点的 Z = 高程（注意 PlaneGeometry 顶点顺序：从左上到右下，行=Y）
+    const pos = geom.attributes.position;
+    // elevations[row][col]：row=0 对应 Y=0(南)。PlaneGeometry 顶点 row=0 在顶部(Y=+H/2，北)。
+    // 所以需翻转 Y 方向：顶点行 j 对应 DEM 行 (nr-1-j)
+    for(let j=0; j<nr; j++){
+      for(let i=0; i<nc; i++){
+        const vidx = (j*nc + i) * 3;
+        const demRow = nr - 1 - j;   // 翻转：顶点 j=0(北) -> DEM 最大 Y 行
+        const z = d.elevations[demRow][i] - off.z;
+        pos.setZ(vidx/3, z);
+      }
+    }
+    pos.needsUpdate = true;
+    geom.computeVertexNormals();
+    // 正射影像作为纹理
+    const tex = new THREE.TextureLoader().load('/data/'+d.texture);
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    // UV：PlaneGeometry 默认 UV 已是 [0..1]，影像北朝上需翻转（V 翻转）
+    const uv = geom.attributes.uv;
+    for(let k=0; k<uv.count; k++){
+      uv.setXY(k, uv.getX(k), 1 - uv.getY(k));
+    }
+    uv.needsUpdate = true;
+    // MeshLambertMaterial 能受光照（地形有立体感）
+    const mat = new THREE.MeshLambertMaterial({
+      map: tex, transparent:true, opacity:.92, side:THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    // 平移到与点云对齐：区域中心 X=0,Y=0（点云已 center()），地形中心也放原点
+    // PlaneGeometry 中心在原点，区域 0..1000 -> 中心 500，减 off.x
+    // 点云 center() 后中心在 0，所以地形也居中即可（已在原点）
+    mesh.name = 'terrainMesh';
+    mesh.rotation.x = 0;  // PlaneGeometry 已在 XY，Z=高程，正确
+    STATE.three.terrainMesh = mesh;
+    STATE.three.scene.add(mesh);
+    // 点云改半透明，让地形纹理透出
+    setTimeout(()=>{
+      if(STATE.three.points){
+        STATE.three.points.material.opacity = .65;
+        STATE.three.points.material.transparent = true;
+        STATE.three.points.material.size = 1.6;
+      }
+    }, 3000);
+    $('#three-info').textContent = ($('#three-info').textContent || '').replace('· 坡度着色','· 影像地形融合');
+  }).catch(e=> console.warn('terrain mesh load failed', e));
+}
+
+// ============================================================
+// 2b) 三维地质结构（隧道/钻孔/异常体）—— 与点云同坐标系融合
+// ============================================================
+STATE.three.geoLayers = { tunnel:null, boreholes:[], anomalies:[], group:null };
+
+function loadGeoStructures(){
+  fetch('/api/3d/structures').then(r=>r.json()).then(d=>{
+    const off = d.coord_offset;
+    const scene = STATE.three.scene;
+    const group = new THREE.Group();
+    group.name = 'geoStructures';
+    STATE.three.geoLayers.group = group;
+
+    // --- 隧道轴线（TubeGeometry）---
+    const axisPts = d.tunnel.axis.map(p=> new THREE.Vector3(p[0]-off.x, p[1]-off.y, p[2]-off.z));
+    const curve = new THREE.CatmullRomCurve3(axisPts);
+    const tubeGeom = new THREE.TubeGeometry(curve, 200, d.tunnel.radius, 16, false);
+    const tubeMat = new THREE.MeshBasicMaterial({
+      color:0xff7a3d, transparent:true, opacity:.25, side:THREE.DoubleSide,
+      wireframe:false,
+    });
+    const tunnel = new THREE.Mesh(tubeGeom, tubeMat);
+    // 隧道轮廓线（让形状可见）
+    const wireMat = new THREE.MeshBasicMaterial({color:0xff9a6b, wireframe:true, transparent:true, opacity:.15});
+    const tunnelWire = new THREE.Mesh(tubeGeom, wireMat);
+    tunnel.add(tunnelWire);
+    tunnel.name = 'tunnel';
+    group.add(tunnel);
+    STATE.three.geoLayers.tunnel = tunnel;
+
+    // --- 钻孔（分层圆柱体）---
+    const bhGroup = new THREE.Group(); bhGroup.name='boreholes';
+    for(const b of d.boreholes){
+      const bx = b.x - off.x, by = b.y - off.y;
+      const bhGrp = new THREE.Group();
+      bhGrp.userData = {id:b.id, name:'borehole'};
+      for(const L of b.layers){
+        const topZ = L.top_z - off.z, botZ = L.bottom_z - off.z;
+        const h = Math.max(0.5, topZ - botZ);
+        const cylGeom = new THREE.CylinderGeometry(2.5, 2.5, h, 10);
+        const cylMat = new THREE.MeshBasicMaterial({color:new THREE.Color(L.color), transparent:true, opacity:.9});
+        const cyl = new THREE.Mesh(cylGeom, cylMat);
+        // CylinderGeometry 默认沿 Y 轴；旋转到 Z 轴，并定位到层中心
+        cyl.rotation.x = Math.PI/2;
+        cyl.position.set(bx, by, (topZ+botZ)/2);
+        bhGrp.add(cyl);
+      }
+      // 地下水位线（蓝色细圆盘）
+      if(b.water_z !== null){
+        const wGeom = new THREE.CylinderGeometry(4, 4, 1, 12);
+        const wMat = new THREE.MeshBasicMaterial({color:0x3d8bff, transparent:true, opacity:.7});
+        const w = new THREE.Mesh(wGeom, wMat);
+        w.rotation.x = Math.PI/2;
+        w.position.set(bx, by, b.water_z - off.z);
+        bhGrp.add(w);
+      }
+      // 孔口标记（小球）
+      const capGeom = new THREE.SphereGeometry(4, 10, 8);
+      const capMat = new THREE.MeshBasicMaterial({color:0x28d1c4});
+      const cap = new THREE.Mesh(capGeom, capMat);
+      cap.position.set(bx, by, b.surface_z - off.z);
+      bhGrp.add(cap);
+      bhGroup.add(bhGrp);
+      STATE.three.geoLayers.boreholes.push(bhGrp);
+    }
+    group.add(bhGroup);
+
+    // --- 异常体（半透明椭球）---
+    const anomGroup = new THREE.Group(); anomGroup.name='anomalies';
+    for(const a of d.anomalies){
+      const ax = a.x - off.x, ay = a.y - off.y, az = a.center_z - off.z;
+      const [sx, sy, sz] = a.size;
+      // 用 SphereGeometry + 缩放做椭球
+      const geom = new THREE.SphereGeometry(1, 20, 16);
+      const colorStr = a.color.replace(/rgba?\(([^)]+)\)/, '$1').split(',').slice(0,3).map(Number);
+      const mat = new THREE.MeshBasicMaterial({
+        color:new THREE.Color(colorStr[0]/255, colorStr[1]/255, colorStr[2]/255),
+        transparent:true, opacity:.4, depthWrite:false,
+      });
+      const sphere = new THREE.Mesh(geom, mat);
+      sphere.scale.set(sx, sy, sz);
+      sphere.position.set(ax, ay, az);
+      sphere.userData = {risk_id:a.risk_id, name:'anomaly', label:a.label};
+      anomGroup.add(sphere);
+      STATE.three.geoLayers.anomalies.push(sphere);
+    }
+    group.add(anomGroup);
+
+    scene.add(group);
+    $('#three-info').textContent = $('#three-info').textContent + ' · 含隧道/钻孔/异常体';
+  }).catch(e=> console.warn('3D structures load failed', e));
+}
+
+function setGeoLayerVisible(name, vis){
+  const L = STATE.three.geoLayers;
+  if(name==='points' && STATE.three.points) STATE.three.points.visible = vis;
+  if(name==='terrain' && STATE.three.terrainMesh) STATE.three.terrainMesh.visible = vis;
+  if(name==='tunnel' && L.tunnel) L.tunnel.visible = vis;
+  if(name==='bh' && L.group) L.group.children.forEach(c=>{ if(c.name==='boreholes') c.visible=vis; });
+  if(name==='anom' && L.group) L.group.children.forEach(c=>{ if(c.name==='anomalies') c.visible=vis; });
+  // 坐标系：交叉网格面 + 三轴 + 指北针 + 比例尺 统一显隐
+  if(name==='coord' && STATE.three.scene){
+    ['crossGrids','coordSystem','compass','scalebar'].forEach(gn=>{
+      const g = STATE.three.scene.children.find(c=>c.name===gn);
+      if(g) g.visible = vis;
+    });
+  }
 }
 
 function flyToRisk(id){
@@ -332,8 +614,9 @@ function animateCam(p0,p1,t0,t1,steps){
   step();
 }
 function resetCam(){
-  animateCam(STATE.three.camera.position, new THREE.Vector3(620,-620,560),
-             STATE.three.controls.target, new THREE.Vector3(0,0,0), 50);
+  // 等角透视视角，能同时看到 XY 平面展开与 Z 高程层次
+  animateCam(STATE.three.camera.position, new THREE.Vector3(750,-750,650),
+             STATE.three.controls.target, new THREE.Vector3(0,0,40), 60);
 }
 
 // ============================================================
@@ -559,6 +842,66 @@ function renderBoreholeChart(b){
   })) });
 }
 
+// 物探电阻率热力图（ECharts heatmap，交互式）
+function renderGeophysicsHeatmap(lid){
+  const el = $('#geo-heatmap-' + lid);
+  if(!el || typeof echarts === 'undefined') return;
+  fetch('/api/geophysics/'+lid+'/grid').then(r=>r.json()).then(d=>{
+    const chart = echarts.init(el);
+    // 颜色：低阻（蓝/紫，危险）→ 高阻（红/白，正常）
+    // jet_r 反转：低阻显眼
+    const data = d.data.map(p=>[p[0], p[1], p[2]]);
+    chart.setOption({
+      tooltip: {
+        backgroundColor:'rgba(20,29,46,.95)', borderColor:'#3d8bff',
+        textStyle:{color:'#dfe7f3',fontSize:11},
+        formatter: p => {
+          const sta = d.stations[p.value[0]];
+          const dep = d.depths[p.value[1]];
+          const rho = p.value[2];
+          return `<b>桩号 ${sta}m</b><br/>深度 ${dep}m<br/>电阻率 <b style="color:${rho<d.anomaly.rho*2.5?'#ff7a3d':'#3dd97a'}">${rho} Ω·m</b>${rho<d.anomaly.rho*2.5?'<br/>⚠️ 低阻异常区':''}`;
+        }
+      },
+      grid: { left:55, right:20, top:15, bottom:35 },
+      xAxis: { type:'category', name:'桩号(m)', nameLocation:'middle', nameGap:22,
+               data: d.stations.map((s,i)=> i%5===0 ? s.toFixed(0) : ''),
+               nameTextStyle:{color:'#8ea0bd',fontSize:10},
+               axisLabel:{color:'#8ea0bd',fontSize:9},
+               splitLine:{show:false} },
+      yAxis: { type:'category', name:'深度(m)', nameTextStyle:{color:'#8ea0bd',fontSize:10},
+               data: d.depths.map(dd=>dd.toFixed(1)),
+               axisLabel:{color:'#8ea0bd',fontSize:9},
+               inverse:false },
+      visualMap: {
+        min: d.rho_min, max: d.rho_max,
+        calculable:true, orient:'horizontal', left:'center', bottom:0,
+        textStyle:{color:'#8ea0bd',fontSize:10},
+        inRange: { color: ['#2c1a6b','#3b5fbf','#5fd4d4','#a8e040','#ffe600','#ff7a3d','#d62728'] },
+      },
+      series: [{
+        type:'heatmap', data:data,
+        // ECharts heatmap: [x_idx, y_idx, value]
+        emphasis:{ itemStyle:{shadowBlur:10, shadowColor:'rgba(0,0,0,.5)'} },
+        // 异常区标注用 markPoint 不可用于 heatmap，改用 graphic
+      }],
+      // 标注异常中心
+      graphic: [{
+        type:'circle',
+        // 把异常 x(米) -> station index
+        shape:{ cx: 0, cy: 0, r:8 },
+        position: [
+          (d.stations.findIndex(s=>Math.abs(s-d.anomaly.x)<8) / d.stations.length) * el.clientWidth,
+          15 + (d.depths.findIndex(dd=>Math.abs(dd-d.anomaly.depth)<2) / d.depths.length) * (el.clientHeight-50)
+        ],
+        style:{ fill:'rgba(255,77,94,.0)', stroke:'#ff4d5e', lineWidth:2.5, lineDash:[4,3]},
+        invisible: d.stations.findIndex(s=>Math.abs(s-d.anomaly.x)<8) < 0,
+      }],
+    });
+    // 异常标注文字
+    chart.setOption({ title: { show:false } });
+  }).catch(e=> console.warn('heatmap fetch failed', e));
+}
+
 // ============================================================
 // 5c) 证据链面板渲染
 // ============================================================
@@ -606,8 +949,14 @@ function renderEvidence(d){
 
 function renderCardExtra(ev){
   if(ev.kind==='geophysics' && ev.file){
-    return `<img class="ev-img" src="/data/${ev.file}" alt="物探剖面">
-            <div class="ev-extra">测线：${ev.extra.name} · 最低电阻率 ${ev.extra.rho_min||'—'} Ω·m</div>`;
+    const lid = ev.extra.id || 'L1';
+    // 交互式热力图（主）+ 静态断面图（参考）
+    const html = `<div id="geo-heatmap-${lid}" style="width:100%;height:240px"></div>
+            <div class="ev-extra">🖱️ 悬停查看精确电阻率 · 测线：${ev.extra.name} · 最低 ${ev.extra.rho_min||'—'} Ω·m</div>
+            <details style="margin-top:6px"><summary style="font-size:11px;color:var(--text-dim);cursor:pointer">📐 查看原始断面图（matplotlib 渲染）</summary>
+              <img class="ev-img" src="/data/${ev.file}" alt="物探剖面" style="margin-top:6px"></details>`;
+    setTimeout(()=> renderGeophysicsHeatmap(lid), 100);
+    return html;
   }
   if(ev.kind==='borehole' && ev.file){
     const imgs = ev.file.map((f,i)=>`<img class="ev-img" src="/data/${f}" style="width:${100/ev.file.length-2}%;display:inline-block;margin-right:2%" alt="钻孔">`).join('');
@@ -871,6 +1220,12 @@ function bindEvents(){
       m.size = m.size > 3 ? 2.2 : 4;
     }
   });
+  // 3D 图层开关
+  $('#tlyr-points').addEventListener('change', e=> setGeoLayerVisible('points', e.target.checked));
+  $('#tlyr-terrain').addEventListener('change', e=> setGeoLayerVisible('terrain', e.target.checked));
+  $('#tlyr-tunnel').addEventListener('change', e=> setGeoLayerVisible('tunnel', e.target.checked));
+  $('#tlyr-bh').addEventListener('change', e=> setGeoLayerVisible('bh', e.target.checked));
+  $('#tlyr-anom').addEventListener('change', e=> setGeoLayerVisible('anom', e.target.checked));
 
   // 底部 tab
   $$('.bottom-tabs .tab').forEach(t=> t.addEventListener('click', ()=> switchTab(t.dataset.tab)));
@@ -897,11 +1252,145 @@ function bindEvents(){
   // 数据源浮窗
   $('#ds-fab').addEventListener('click', ()=> $('#ds-panel').classList.toggle('show'));
   $('#ds-close').addEventListener('click', ()=> $('#ds-panel').classList.remove('show'));
+
+  // 全屏（最大化）切换
+  $$('.ph-fs').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const sel = btn.dataset.target;
+      const target = document.querySelector(sel);
+      if(!target) return;
+      const on = target.classList.toggle('fs-active');
+      btn.classList.toggle('fs-on', on);
+      btn.textContent = on ? '⤡' : '⤢';
+      // 关闭其它已最大化的面板
+      $$('.fs-active').forEach(el=>{ if(el!==target){
+        el.classList.remove('fs-active');
+        const key = Array.from(el.classList).find(c=>c.endsWith('-panel')||c==='bottombar');
+        const b = key && document.querySelector('.ph-fs[data-target=".'+key+'"]');
+        if(b){ b.classList.remove('fs-on'); b.textContent='⤢'; }
+      }});
+      // 等 CSS 过渡后重排
+      setTimeout(relayout, 60);
+    });
+  });
+
+  // ESC 退出全屏
+  document.addEventListener('keydown', e=>{
+    if(e.key==='Escape'){
+      const act = document.querySelector('.fs-active');
+      if(act){
+        act.classList.remove('fs-active');
+        document.querySelectorAll('.ph-fs.fs-on').forEach(b=>{ b.classList.remove('fs-on'); b.textContent='⤢'; });
+        setTimeout(relayout, 60);
+      }
+    }
+  });
+
+  // 窗口自适应：集中重排地图 / 3D / 图表
+  let _rzT = null;
+  window.addEventListener('resize', ()=>{
+    clearTimeout(_rzT);
+    _rzT = setTimeout(relayout, 80);
+  });
+}
+
+// 重排所有可视化（窗口缩放 / 全屏切换后调用）
+function relayout(){
+  if(STATE.map){
+    try { STATE.map.invalidateSize({animate:false}); } catch(e){}
+  }
+  if(STATE.three.renderer && STATE.three.camera){
+    const c = STATE.three.renderer.domElement.parentElement;
+    const w = c.clientWidth, h = c.clientHeight;
+    if(w>0 && h>0){
+      STATE.three.camera.aspect = w/h;
+      STATE.three.camera.updateProjectionMatrix();
+      STATE.three.renderer.setSize(w, h);
+    }
+  }
+  // ECharts 实例
+  try {
+    if(typeof _radarChart!=='undefined' && _radarChart) _radarChart.resize();
+  } catch(e){}
+  document.querySelectorAll('[_echarts_instance_]').forEach(el=>{
+    const inst = echarts.getInstanceByDom(el);
+    if(inst) inst.resize();
+  });
 }
 
 function switchTab(name){
   $$('.bottom-tabs .tab').forEach(t=> t.classList.toggle('active', t.dataset.tab===name));
   $$('.tab-pane').forEach(p=> p.classList.toggle('active', p.id==='pane-'+name));
+  if(name === 'profile' && !STATE._profileLoaded){
+    renderRouteProfile();
+  }
+}
+
+// ============================================================
+// 9b) 沿线地质纵剖面 (ECharts)
+// ============================================================
+async function renderRouteProfile(){
+  const out = $('#profile-output');
+  if(!out) return;
+  out.innerHTML = '<div class="report-empty">⏳ 正在计算沿线地质剖面…</div>';
+  try{
+    const d = await getJSON('/api/profile/route');
+    STATE._profileLoaded = true;
+    const xs = d.mileage_x;
+    // 风险区段 markArea
+    const markAreas = d.risk_zones.map(z=>{
+      const c = z.level==='高' ? 'rgba(255,77,94,.15)' : (z.level==='中高' ? 'rgba(255,122,61,.12)' : 'rgba(255,205,61,.1)');
+      return [{xAxis: z.start_x}, {xAxis: z.end_x, itemStyle:{color:c}, label:{show:true, formatter: z.mileage+'\n'+z.type_cn, color:'#dfe7f3', fontSize:9, position:'insideTop'}}];
+    });
+    // 钻孔标点
+    const bhMarks = d.boreholes.map(b=>({
+      name: b.id, coord: [b.profile_x, b.elevation],
+      label:{ show:true, formatter:b.id, color:'#28d1c4', fontSize:9, position:'top' },
+      itemStyle:{ color:'#28d1c4' }, symbol:'triangle', symbolSize:8,
+    }));
+    out.innerHTML = `
+      <div id="profile-chart" style="width:100%;height:100%;min-height:180px"></div>
+      <div style="display:flex;gap:12px;font-size:11px;color:var(--text-dim);padding:6px 0;flex-wrap:wrap">
+        <span>🏔️ 地表高程：${d.stats.surface_range[0]}~${d.stats.surface_range[1]}m</span>
+        <span>⛏️ 隧道埋深：${d.stats.min_cover}~${d.stats.max_cover}m</span>
+        <span>📏 纵坡：${d.stats.tunnel_grade_pct}%</span>
+        <span style="color:#28d1c4">🔩 钻孔投影：${d.boreholes.length} 个</span>
+      </div>`;
+    const chart = echarts.init($('#profile-chart'));
+    chart.setOption({
+      tooltip: { trigger:'axis', backgroundColor:'rgba(20,29,46,.95)', borderColor:'#3d8bff',
+                 textStyle:{color:'#dfe7f3',fontSize:11},
+                 formatter: params => {
+                   const i = params[0].dataIndex;
+                   return `<b>${d.mileage_labels[i]}</b><br/>` + params.map(p=>
+                     `${p.marker} ${p.seriesName}: <b>${p.value}m</b>`).join('<br/>')
+                     + `<br/>埋深: <b>${d.cover_depth[i]}m</b>`;
+                 }},
+      legend: { data:['地表高程','隧道设计高程'], textStyle:{color:'#8ea0bd'}, top:0 },
+      grid: { left:55, right:20, top:30, bottom:30 },
+      xAxis: { type:'value', name:'里程(m)', min:0, max:1000,
+               nameTextStyle:{color:'#8ea0bd',fontSize:10},
+               axisLabel:{ color:'#8ea0bd',fontSize:9, formatter:v=>'K+'+v },
+               splitLine:{lineStyle:{color:'#2c3a55'}} },
+      yAxis: { type:'value', name:'高程(m)', scale:true,
+               nameTextStyle:{color:'#8ea0bd',fontSize:10},
+               axisLabel:{color:'#8ea0bd',fontSize:9},
+               splitLine:{lineStyle:{color:'#2c3a55'}} },
+      series: [
+        { name:'地表高程', type:'line', data: d.surface_elev, smooth:true,
+          symbol:'none', lineStyle:{width:2, color:'#3dd97a'},
+          areaStyle:{ color:new echarts.graphic.LinearGradient(0,0,0,1,[
+            {offset:0,color:'rgba(61,217,122,.35)'},{offset:1,color:'rgba(61,217,122,.02)'}]) },
+          markArea:{ data: markAreas, silent:true },
+          markPoint:{ data: bhMarks, symbolSize:8 },
+        },
+        { name:'隧道设计高程', type:'line', data: d.tunnel_elev,
+          symbol:'none', lineStyle:{width:2, color:'#ff7a3d', type:'dashed'} },
+      ],
+    });
+  }catch(e){
+    out.innerHTML = `<div class="report-empty" style="color:var(--danger)">⚠ 加载失败：${escapeHtml(e.message)}</div>`;
+  }
 }
 
 // 启动
@@ -911,9 +1400,4 @@ if(document.readyState === 'loading'){
   init();
 }
 
-
-// DEMO TEMP
-if(new URLSearchParams(location.search).get('demo')==='1'){
-  window.addEventListener('load',async()=>{const s=ms=>new Promise(r=>setTimeout(r,ms));for(let i=0;i<100&&!window.STATE;i++)await s(100);await s(800);selectRisk('R001');});
-}
 })();

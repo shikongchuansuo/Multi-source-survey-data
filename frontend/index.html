@@ -44,6 +44,7 @@
   <section class="panel map-panel">
     <div class="panel-head"><span class="ph-icon">🗺️</span><span>正射影像 / 多源空间要素</span>
       <span class="ph-hint" id="map-coord">坐标：—</span>
+      <button class="ph-fs" data-target=".map-panel" title="全屏/还原">⤢</button>
     </div>
     <div id="map"></div>
     <div class="map-legend">
@@ -59,12 +60,28 @@
   <section class="panel three-panel">
     <div class="panel-head"><span class="ph-icon">🏔️</span><span>三维点云 / 地形</span>
       <span class="ph-hint" id="three-info">点云：加载中…</span>
+      <button class="ph-fs" data-target=".three-panel" title="全屏/还原">⤢</button>
     </div>
     <div id="three-container"></div>
     <div class="three-toolbar">
       <button id="btn-flyto" title="定位到当前选中风险区">🎯 定位风险区</button>
       <button id="btn-reset" title="重置视角">⟲ 重置视角</button>
-      <button id="btn-slope" title="切换坡度/高程着色">🎨 坡度着色</button>
+      <button id="btn-slope" title="切换点云大小">🎨 点大小</button>
+    </div>
+    <div class="three-layers">
+      <div class="tl-title">3D 图层</div>
+      <label><input type="checkbox" id="tlyr-points" checked> ☁️ 点云</label>
+      <label><input type="checkbox" id="tlyr-terrain" checked> 🛰 影像地形</label>
+      <label><input type="checkbox" id="tlyr-tunnel" checked> ⛏️ 隧道</label>
+      <label><input type="checkbox" id="tlyr-bh" checked> 🔩 钻孔</label>
+      <label><input type="checkbox" id="tlyr-anom" checked> ⚠️ 异常体</label>
+    </div>
+    <div class="three-legend">
+      <div class="tleg"><span style="background:#3dd97a;width:10px;height:10px;border-radius:50%;display:inline-block"></span> 点云</div>
+      <div class="tleg"><span style="background:linear-gradient(90deg,#5a7a3a,#a08060);width:14px;height:10px;display:inline-block"></span> 遥感影像地形</div>
+      <div class="tleg"><span style="background:#ff7a3d;width:10px;height:10px;display:inline-block"></span> 隧道</div>
+      <div class="tleg"><span style="background:#28d1c4;width:8px;height:10px;display:inline-block"></span> 钻孔</div>
+      <div class="tleg"><span style="background:rgba(40,120,220,.6);width:10px;height:10px;border-radius:50%;display:inline-block"></span> 异常体</div>
     </div>
   </section>
 
@@ -72,6 +89,7 @@
   <section class="panel evidence-panel">
     <div class="panel-head"><span class="ph-icon">🔗</span><span>多源证据链</span>
       <span class="ph-hint" id="ev-target">未选中</span>
+      <button class="ph-fs" data-target=".evidence-panel" title="全屏/还原">⤢</button>
     </div>
     <div id="evidence-content" class="evidence-content">
       <div class="empty-state">
@@ -92,7 +110,9 @@
   <div class="bottom-tabs">
     <button class="tab active" data-tab="interpret">📋 风险解释</button>
     <button class="tab" data-tab="qa">💬 智能对话</button>
+    <button class="tab" data-tab="profile">📐 线路剖面</button>
     <button class="tab" data-tab="report">📑 报告生成</button>
+    <button class="ph-fs bottom-fs" data-target=".bottombar" title="全屏/还原">⤢</button>
   </div>
   <div class="bottom-body">
     <!-- 风险解释 -->
@@ -137,6 +157,12 @@
           选择报告范围和格式，点击「生成预览」查看内容，或直接「下载文件」。<br>
           <span style="font-size:11px;opacity:.7">支持 Word/Markdown/HTML 三种格式，Word 报告内嵌物探剖面图与钻孔柱状图。</span>
         </div>
+      </div>
+    </div>
+    <!-- 线路剖面 -->
+    <div class="tab-pane" id="pane-profile">
+      <div id="profile-output" style="height:100%">
+        <div class="report-empty">点击「📐 线路剖面」自动加载沿线地质纵剖面图…</div>
       </div>
     </div>
   </div>
