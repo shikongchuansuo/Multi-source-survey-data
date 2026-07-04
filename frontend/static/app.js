@@ -1226,6 +1226,7 @@ function bindEvents(){
   $('#tlyr-tunnel').addEventListener('change', e=> setGeoLayerVisible('tunnel', e.target.checked));
   $('#tlyr-bh').addEventListener('change', e=> setGeoLayerVisible('bh', e.target.checked));
   $('#tlyr-anom').addEventListener('change', e=> setGeoLayerVisible('anom', e.target.checked));
+  $('#tlyr-coord').addEventListener('change', e=> setGeoLayerVisible('coord', e.target.checked));
 
   // 底部 tab
   $$('.bottom-tabs .tab').forEach(t=> t.addEventListener('click', ()=> switchTab(t.dataset.tab)));
