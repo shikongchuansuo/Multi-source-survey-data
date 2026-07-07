@@ -75,7 +75,14 @@
       <label><input type="checkbox" id="tlyr-tunnel" checked> ⛏️ 隧道</label>
       <label><input type="checkbox" id="tlyr-bh" checked> 🔩 钻孔</label>
       <label><input type="checkbox" id="tlyr-anom" checked> ⚠️ 异常体</label>
+      <label><input type="checkbox" id="tlyr-sections" checked> 📡 物探剖面</label>
+      <label><input type="checkbox" id="tlyr-voxel" checked> 🧱 地质体</label>
       <label><input type="checkbox" id="tlyr-coord" checked> 🧭 坐标系</label>
+      <div class="tl-clip" title="沿里程方向剖切三维地质体">
+        <span>✂️ 剖切</span>
+        <input type="range" id="voxel-clip" min="0" max="100" value="40">
+        <span id="voxel-clip-lbl">K12.40</span>
+      </div>
     </div>
     <div class="three-legend">
       <div class="tleg"><span style="background:#3dd97a;width:10px;height:10px;border-radius:50%;display:inline-block"></span> 点云</div>
@@ -83,6 +90,8 @@
       <div class="tleg"><span style="background:#ff7a3d;width:10px;height:10px;display:inline-block"></span> 隧道</div>
       <div class="tleg"><span style="background:#28d1c4;width:8px;height:10px;display:inline-block"></span> 钻孔</div>
       <div class="tleg"><span style="background:rgba(40,120,220,.6);width:10px;height:10px;border-radius:50%;display:inline-block"></span> 异常体</div>
+      <div class="tleg"><span style="background:linear-gradient(90deg,#2c1a6b,#5fd4d4,#ffe600,#d62728);width:14px;height:10px;display:inline-block"></span> 物探剖面(Ω·m)</div>
+      <div id="voxel-legend"></div>
     </div>
   </section>
 

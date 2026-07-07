@@ -11,6 +11,7 @@
 前端约定：渲染时 X-=500, Y-=400, Z-=950，与点云对齐。
 """
 import os
+import csv
 import json
 import math
 import numpy as np
@@ -160,6 +161,58 @@ def build_3d_structures():
         "anomalies": anomalies,
         "coord_offset": {"x": 500, "y": 400, "z": 950},  # 前端渲染时减去
         "note": "坐标为工程局部系；前端渲染时 X-=500, Y-=400, Z-=950 与点云对齐",
+    }
+
+
+def build_3d_sections():
+    """物探测线三维帷幕面数据。
+
+    把每条测线的电阻率断面 (station × depth) 展成随地形起伏的
+    三维"帷幕"网格：每个桩号给出平面坐标 xy 与地表高程 surface_z，
+    前端按 z = surface_z - depth 生成竖直曲面顶点，用电阻率着色。
+    """
+    lines = _load("geophysics", "lines.json")
+    out = []
+    for ln in lines:
+        path = os.path.join(DATA, *ln["csv"].split("/"))
+        stations, depths, grid = set(), set(), {}
+        with open(path, "r", encoding="utf-8-sig") as f:
+            for row in csv.DictReader(f):
+                s = float(row["station_m"])
+                d = float(row["depth_m"])
+                grid[(s, d)] = float(row["rho_ohm_m"])
+                stations.add(s)
+                depths.add(d)
+        stations = sorted(stations)
+        depths = sorted(depths)
+        sx, sy = ln["start_xy"]
+        ex, ey = ln["end_xy"]
+        length = math.hypot(ex - sx, ey - sy) or 1.0
+        ux, uy = (ex - sx) / length, (ey - sy) / length
+        xy, surf = [], []
+        for s in stations:
+            x, y = sx + ux * s, sy + uy * s
+            xy.append([round(x, 1), round(y, 1)])
+            surf.append(round(_elev_at(x, y), 1))
+        # rho[depth_idx][station_idx]
+        rho = [[round(grid.get((s, d), 0.0), 1) for s in stations]
+               for d in depths]
+        vals = [v for r_ in rho for v in r_]
+        out.append({
+            "id": ln["id"], "name": ln["name"], "method": ln["method"],
+            "related_risk": ln.get("related_risk"),
+            "stations": [round(s, 1) for s in stations],
+            "depths": [round(d, 1) for d in depths],
+            "xy": xy,
+            "surface_z": surf,
+            "rho": rho,
+            "rho_min": round(min(vals), 1),
+            "rho_max": round(max(vals), 1),
+        })
+    return {
+        "lines": out,
+        "coord_offset": {"x": 500, "y": 400, "z": 950},
+        "note": "帷幕面顶点 z = surface_z[i] - depths[j]；渲染时减 coord_offset",
     }
 
 

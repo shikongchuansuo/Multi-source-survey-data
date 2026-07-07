@@ -128,6 +128,7 @@ function drawBoreholes(){
   fetch('/api/boreholes').then(r=>r.json()).then(d=>{
     const list = d.boreholes;
     STATE.boreholeCache = {};        // 缓存，供对话定位用
+    STATE.bhMarkers = {};            // id -> marker，供 3D 拾取联动用
     for(const bh of list){
       STATE.boreholeCache[bh.id] = bh;
       const m = L.marker(xyToLatLng(bh.xy), {icon: bhIcon()})
@@ -135,6 +136,7 @@ function drawBoreholes(){
           (bh.water_depth_m!=null?`<br>地下水位 ${bh.water_depth_m}m`:'')+
           `<br><a href="/data/boreholes/${bh.id}.png" target="_blank">查看柱状图 ↗</a>`);
       m.addTo(STATE.layers.bh);
+      STATE.bhMarkers[bh.id] = m;
     }
   });
 }
@@ -223,6 +225,7 @@ function initThree(){
   const renderer = new THREE.WebGLRenderer({antialias:true, alpha:false});
   renderer.setSize(W, H);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.localClippingEnabled = true;   // 体素地质体剖切用
   container.appendChild(renderer.domElement);
   STATE.three.renderer = renderer;
 
@@ -242,10 +245,13 @@ function initThree(){
   const fill = new THREE.DirectionalLight(0x80a0ff, .3);
   fill.position.set(500, -300, 400); scene.add(fill);
 
-  // 加载点云 / 地形 / 地质结构
+  // 加载点云 / 地形 / 地质结构 / 物探剖面 / 体素地质体
   loadPointCloud();
   loadTerrainMesh();
   loadGeoStructures();
+  loadGeoSections();
+  loadVoxelModel();
+  initPicking(renderer, camera);
 
   // --- 空间参考：两片透明网格十字交叉，把空间分8块，主展示正半轴(+X+Y+Z)区域 ---
   // 数据范围：X[-500,500] Y[-400,400] Z[-30,150]。把交叉原点放在后下角(-500,-400,-30)，
@@ -471,7 +477,8 @@ function loadTerrainMesh(){
 // ============================================================
 // 2b) 三维地质结构（隧道/钻孔/异常体）—— 与点云同坐标系融合
 // ============================================================
-STATE.three.geoLayers = { tunnel:null, boreholes:[], anomalies:[], group:null };
+STATE.three.geoLayers = { tunnel:null, boreholes:[], anomalies:[], group:null,
+                          sections:null, voxel:null, voxelClip:null };
 
 function loadGeoStructures(){
   fetch('/api/3d/structures').then(r=>r.json()).then(d=>{
@@ -530,6 +537,10 @@ function loadGeoStructures(){
       const cap = new THREE.Mesh(capGeom, capMat);
       cap.position.set(bx, by, b.surface_z - off.z);
       bhGrp.add(cap);
+      // 孔号标签（面向相机）
+      bhGrp.add(makeTextSprite(b.id, '#28d1c4', bx, by, b.surface_z - off.z + 14, 34));
+      // 全部子网格打上钻孔 id，供拾取联动
+      bhGrp.traverse(c=>{ c.userData.bh_id = b.id; });
       bhGroup.add(bhGrp);
       STATE.three.geoLayers.boreholes.push(bhGrp);
     }
@@ -561,6 +572,181 @@ function loadGeoStructures(){
   }).catch(e=> console.warn('3D structures load failed', e));
 }
 
+// ============================================================
+// 2c) 物探剖面三维帷幕面 —— 电阻率断面按测线走向 + 地形起伏立入三维场景
+// ============================================================
+// 与 2D 热力图同一色带：低阻(蓝紫,危险) -> 高阻(红,正常)
+const RHO_STOPS = ['#2c1a6b','#3b5fbf','#5fd4d4','#a8e040','#ffe600','#ff7a3d','#d62728']
+  .map(h=> new THREE.Color(h));
+function rhoColor(v, vmin, vmax){
+  const t = Math.max(0, Math.min(1, (v - vmin) / Math.max(1e-6, vmax - vmin)));
+  const f = t * (RHO_STOPS.length - 1);
+  const i = Math.min(RHO_STOPS.length - 2, Math.floor(f));
+  return RHO_STOPS[i].clone().lerp(RHO_STOPS[i+1], f - i);
+}
+
+function loadGeoSections(){
+  fetch('/api/3d/sections').then(r=>r.json()).then(d=>{
+    const off = d.coord_offset;
+    const group = new THREE.Group(); group.name = 'geoSections';
+    STATE.three.geoLayers.sections = [];
+    for(const line of d.lines){
+      const ns = line.stations.length, nd = line.depths.length;
+      const pos = new Float32Array(ns * nd * 3);
+      const col = new Float32Array(ns * nd * 3);
+      for(let j = 0; j < nd; j++){
+        for(let i = 0; i < ns; i++){
+          const k = j * ns + i;
+          pos[k*3]   = line.xy[i][0] - off.x;
+          pos[k*3+1] = line.xy[i][1] - off.y;
+          pos[k*3+2] = line.surface_z[i] - line.depths[j] - off.z;
+          const c = rhoColor(line.rho[j][i], line.rho_min, line.rho_max);
+          col[k*3] = c.r; col[k*3+1] = c.g; col[k*3+2] = c.b;
+        }
+      }
+      // 索引三角化（(ns-1)×(nd-1) 个网格 × 2 三角形）
+      const idx = [];
+      for(let j = 0; j < nd - 1; j++){
+        for(let i = 0; i < ns - 1; i++){
+          const a = j*ns+i, b = j*ns+i+1, c2 = (j+1)*ns+i, d2 = (j+1)*ns+i+1;
+          idx.push(a, b, c2,  b, d2, c2);
+        }
+      }
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geom.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      geom.setIndex(idx);
+      const mat = new THREE.MeshBasicMaterial({
+        vertexColors:true, side:THREE.DoubleSide, transparent:true, opacity:.92,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.userData = { section:true, id:line.id, name:line.name, risk_id:line.related_risk };
+      group.add(mesh);
+      // 测线编号标签（起点上方）
+      group.add(makeTextSprite(line.id + ' ' + line.method, '#7db0ff',
+        line.xy[0][0] - off.x, line.xy[0][1] - off.y, line.surface_z[0] - off.z + 20, 32));
+      STATE.three.geoLayers.sections.push(mesh);
+    }
+    STATE.three.scene.add(group);
+    $('#three-info').textContent = $('#three-info').textContent + ' · 物探剖面×' + d.lines.length;
+  }).catch(e=> console.warn('3D sections load failed', e));
+}
+
+// ============================================================
+// 2d) 三维体素地质体 —— 连续地下地质结构（对接文档交付格式 / 演示模型）
+//     InstancedMesh 单次绘制 + X 向剖切平面（滑杆控制）
+// ============================================================
+function loadVoxelModel(){
+  fetch('/api/3d/voxel').then(r=>r.json()).then(d=>{
+    const [nx, ny, nz] = d.shape;
+    const [dx, dy, dz] = d.spacing_m;
+    const [ox, oy, oz] = d.origin_xyz;
+    const off = d.coord_offset;
+    const catColor = {};
+    for(const c of d.categories) catColor[c.code] = new THREE.Color(c.color);
+    const fallback = new THREE.Color('#777777');
+    // 实体体素计数
+    let count = 0;
+    for(let i = 0; i < d.data.length; i++) if(d.data[i] !== d.nodata) count++;
+    // 剖切平面：保留 x <= constant 的部分
+    const clip = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
+    STATE.three.geoLayers.voxelClip = clip;
+    const boxGeom = new THREE.BoxGeometry(dx*.96, dy*.96, dz*.9);
+    const mat = new THREE.MeshLambertMaterial({ clippingPlanes:[clip] });
+    const inst = new THREE.InstancedMesh(boxGeom, mat, count);
+    inst.name = 'voxelModel';
+    const m4 = new THREE.Matrix4();
+    let k = 0;
+    for(let iz = 0; iz < nz; iz++){
+      for(let iy = 0; iy < ny; iy++){
+        for(let ix = 0; ix < nx; ix++){
+          const v = d.data[(iz*ny + iy)*nx + ix];
+          if(v === d.nodata) continue;
+          m4.setPosition(ox + (ix+.5)*dx - off.x,
+                         oy + (iy+.5)*dy - off.y,
+                         oz + (iz+.5)*dz - off.z);
+          inst.setMatrixAt(k, m4);
+          inst.setColorAt(k, catColor[v] || fallback);
+          k++;
+        }
+      }
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    if(inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    STATE.three.geoLayers.voxel = inst;
+    STATE.three.scene.add(inst);
+    // 初始剖切位置与滑杆同步
+    const slider = $('#voxel-clip');
+    setVoxelClip(slider ? Number(slider.value) : 40);
+    renderVoxelLegend(d);
+    $('#three-info').textContent = $('#three-info').textContent +
+      ` · 地质体${(count/1000).toFixed(0)}k体素(${d.source==='demo'?'演示':'交付'})`;
+  }).catch(e=> console.warn('voxel model load failed', e));
+}
+
+// pct: 0..100 -> 剖切面 X 位置（-500..500，工程 K12+000..K13+000）
+function setVoxelClip(pct){
+  const clip = STATE.three.geoLayers.voxelClip;
+  if(!clip) return;
+  clip.constant = -500 + pct/100 * 1000 + 0.01;
+  const lbl = $('#voxel-clip-lbl');
+  if(lbl){
+    const mile = 12 + pct/100;
+    lbl.textContent = pct >= 100 ? '全显' : 'K' + mile.toFixed(2);
+  }
+}
+
+function renderVoxelLegend(d){
+  const box = $('#voxel-legend');
+  if(!box) return;
+  box.innerHTML = d.categories.map(c=>
+    `<div class="tleg"><span style="background:${c.color};width:10px;height:10px;display:inline-block;border-radius:2px"></span> ${c.name_cn}</div>`
+  ).join('');
+}
+
+// ============================================================
+// 2e) 三维拾取联动 —— 点异常体/物探剖面 → 风险证据链；点钻孔 → 地图弹窗
+// ============================================================
+function initPicking(renderer, camera){
+  const el = renderer.domElement;
+  const ray = new THREE.Raycaster();
+  const v2 = new THREE.Vector2();
+  let downXY = null;
+  el.addEventListener('pointerdown', e=>{ downXY = [e.clientX, e.clientY]; });
+  el.addEventListener('pointerup', e=>{
+    if(!downXY) return;
+    const moved = Math.hypot(e.clientX - downXY[0], e.clientY - downXY[1]);
+    downXY = null;
+    if(moved > 5) return;              // 拖拽旋转不算点击
+    const rect = el.getBoundingClientRect();
+    v2.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    v2.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    ray.setFromCamera(v2, camera);
+    const GL = STATE.three.geoLayers;
+    const targets = [];
+    for(const a of GL.anomalies) if(a.visible && a.parent.visible) targets.push(a);
+    for(const g of GL.boreholes) if(g.visible) g.children.forEach(c=>{ if(c.isMesh) targets.push(c); });
+    if(GL.sections) for(const s of GL.sections) if(s.visible && s.parent.visible) targets.push(s);
+    const hits = ray.intersectObjects(targets, false);
+    if(!hits.length) return;
+    const o = hits[0].object;
+    if(o.userData.risk_id){
+      // 异常体 / 物探剖面 → 联动风险证据链（3D -> 2D -> 证据面板）
+      selectRisk(o.userData.risk_id);
+    } else if(o.userData.bh_id){
+      // 钻孔 → 地图定位 + 弹窗柱状信息
+      const id = o.userData.bh_id;
+      const bh = STATE.boreholeCache && STATE.boreholeCache[id];
+      if(bh && STATE.map){
+        STATE.map.setView(xyToLatLng(bh.xy), Math.max(STATE.map.getZoom(), 1));
+        const mk = STATE.bhMarkers && STATE.bhMarkers[id];
+        if(mk) mk.openPopup();
+      }
+      $('#three-info').textContent = `🔩 ${id} · 孔深 ${bh ? bh.depth_m : '—'}m · 已在左图定位`;
+    }
+  });
+}
+
 function setGeoLayerVisible(name, vis){
   const L = STATE.three.geoLayers;
   if(name==='points' && STATE.three.points) STATE.three.points.visible = vis;
@@ -568,6 +754,11 @@ function setGeoLayerVisible(name, vis){
   if(name==='tunnel' && L.tunnel) L.tunnel.visible = vis;
   if(name==='bh' && L.group) L.group.children.forEach(c=>{ if(c.name==='boreholes') c.visible=vis; });
   if(name==='anom' && L.group) L.group.children.forEach(c=>{ if(c.name==='anomalies') c.visible=vis; });
+  if(name==='sections' && STATE.three.scene){
+    const g = STATE.three.scene.children.find(c=>c.name==='geoSections');
+    if(g) g.visible = vis;
+  }
+  if(name==='voxel' && L.voxel) L.voxel.visible = vis;
   // 坐标系：交叉网格面 + 三轴 + 指北针 + 比例尺 统一显隐
   if(name==='coord' && STATE.three.scene){
     ['crossGrids','coordSystem','compass','scalebar'].forEach(gn=>{
@@ -1029,23 +1220,57 @@ async function loadChatSuggestions(){
   }catch(e){ /* 静默失败 */ }
 }
 
+function nowTime(){
+  const d = new Date();
+  return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+
+// 渲染一条消息（type: 'user'|'bot'），返回气泡内容元素
+function appendMsgRow(type, avatar, innerHTML){
+  const out = $('#qa-output');
+  const row = document.createElement('div');
+  row.className = 'qa-row ' + type;
+  const bubble = document.createElement('div');
+  bubble.className = 'qa-bubble';
+  const msg = document.createElement('div');
+  msg.className = 'qa-msg ' + type;
+  msg.innerHTML = innerHTML;
+  bubble.appendChild(msg);
+  row.innerHTML = `<div class="qa-avatar ${type}">${avatar}</div>`;
+  row.appendChild(bubble);
+  out.appendChild(row);
+  out.scrollTop = out.scrollHeight;
+  return msg;
+}
+
+// 欢迎引导态（首次进入时显示）
+function showWelcome(){
+  const out = $('#qa-output');
+  if(out.querySelector('.qa-welcome')) return;
+  out.innerHTML = `<div class="qa-welcome">
+    <div class="w-icon">🛰️</div>
+    <div class="w-title">多源勘察证据链 · 智能助手</div>
+    <div class="w-sub">我能帮你 <b style="color:var(--accent2)">定位风险</b> · <b style="color:var(--accent2)">条件查询</b> · <b style="color:var(--accent2)">对比分析</b> · <b style="color:var(--accent2)">风险解释</b> · <b style="color:var(--accent2)">生成报告</b>。<br>试着输入或点击下方快捷指令开始对话。</div>
+  </div>`;
+}
+
 async function sendChat(text){
   text = (text ?? '').trim();
   if(!text) return;
   const input = $('#qa-input');
   if(input) input.value = '';
   const out = $('#qa-output');
-  // 用户气泡
-  const uMsg = document.createElement('div');
-  uMsg.className = 'qa-msg user';
-  uMsg.innerHTML = `<b>🙋</b> ${escapeHtml(text)}`;
-  out.appendChild(uMsg);
+  // 清除欢迎引导
+  const welcome = out.querySelector('.qa-welcome');
+  if(welcome) welcome.remove();
+  // 用户消息（头像 + 气泡 + 时间）
+  appendMsgRow('user', '🙋',
+    `<div class="msg-meta"><span style="color:var(--accent2);font-weight:600">我</span><span class="msg-time">${nowTime()}</span></div>` +
+    escapeHtml(text));
   switchTab('qa');
-  // bot 占位
-  const bot = document.createElement('div');
-  bot.className = 'qa-msg bot';
-  bot.innerHTML = '<div class="thinking">正在理解意图并检索证据链</div>';
-  out.appendChild(bot);
+  // bot 占位（思考动画）
+  const bot = appendMsgRow('bot', '🤖',
+    `<div class="thinking"><span class="think-dots"><span></span><span></span><span></span></span>正在理解意图并检索证据链</div>`);
   out.scrollTop = out.scrollHeight;
   try{
     const r = await fetch('/api/chat',{
@@ -1067,7 +1292,7 @@ async function sendChat(text){
     const refs = (d.evidence_refs||[]).filter(x=>x.risk_id).map(ref=>
       `<span class="ref-chip" data-rid="${ref.risk_id}">🔗 ${escapeHtml(ref.title)}</span>`).join('');
     bot.innerHTML = `
-      <div class="msg-meta">${badge}<span>NLU 引擎</span></div>
+      <div class="msg-meta">${badge}<span>NLU 引擎</span><span class="msg-time">${nowTime()}</span></div>
       ${html}
       ${actions?`<div class="qa-actions">${actions}
         <span style="font-size:10px;color:var(--text-dim);align-self:center">↑ 点击执行联动</span></div>`:''}
@@ -1227,6 +1452,10 @@ function bindEvents(){
   $('#tlyr-bh').addEventListener('change', e=> setGeoLayerVisible('bh', e.target.checked));
   $('#tlyr-anom').addEventListener('change', e=> setGeoLayerVisible('anom', e.target.checked));
   $('#tlyr-coord').addEventListener('change', e=> setGeoLayerVisible('coord', e.target.checked));
+  $('#tlyr-sections').addEventListener('change', e=> setGeoLayerVisible('sections', e.target.checked));
+  $('#tlyr-voxel').addEventListener('change', e=> setGeoLayerVisible('voxel', e.target.checked));
+  // 地质体剖切滑杆（沿里程 X 向切开体素模型）
+  $('#voxel-clip').addEventListener('input', e=> setVoxelClip(Number(e.target.value)));
 
   // 底部 tab
   $$('.bottom-tabs .tab').forEach(t=> t.addEventListener('click', ()=> switchTab(t.dataset.tab)));
@@ -1235,6 +1464,7 @@ function bindEvents(){
   $('#qa-send').addEventListener('click', ()=> sendChat($('#qa-input').value));
   $('#qa-input').addEventListener('keydown', e=>{ if(e.key==='Enter') sendChat(e.target.value); });
   loadChatSuggestions();   // 异步加载快捷指令
+  showWelcome();           // 欢迎引导态
 
   // 报告
   $('#report-gen').addEventListener('click', genReport);

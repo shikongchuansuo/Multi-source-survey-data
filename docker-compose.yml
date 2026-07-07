@@ -1,0 +1,46 @@
+# 多源勘察数据融合系统 —— 一键编排
+#
+# 用法：
+#   docker compose up              # 启动 app + db（完整模式）
+#   docker compose up app          # 仅 app（离线兜底，use_db=false）
+#
+# 首次启动会自动生成样例数据（如 backend/data 缺失）。
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: fusion
+      POSTGRES_PASSWORD: fusion
+      POSTGRES_DB: fusion
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fusion"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FUSION_USE_DB: "true"
+      FUSION_DATABASE_URL: postgresql+psycopg://fusion:fusion@db:5432/fusion
+      FUSION_HOST: "0.0.0.0"
+      FUSION_PORT: "8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/backend/data
+      - ./frontend:/app/frontend
+    # 首次启动：若数据缺失则生成，然后启动服务
+    command: >
+      sh -c "python -c \"import os; os.path.exists('backend/data/manifest.json') or __import__('subprocess').check_call(['python','backend/generate_data.py'])\" &&
+             python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  pgdata:
