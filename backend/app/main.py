@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.lifespan import lifespan
-from app.static_assets import mount_static
+from app.static_assets import CacheControlMiddleware, mount_static
 from app.api.routers import (
     manifest as manifest_router,
     risk as risk_router,
@@ -49,6 +49,11 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # 静态资源缓存头：必须在首次请求前注册（Starlette 会在首个请求冻结中间件栈）。
+    # 后注册先执行：CacheControlMiddleware 比 CORS 更靠近应用，能拦截 StaticFiles
+    # 产生的响应并注入 Cache-Control，从而让 echarts/three/leaflet 等 ~2MB 库在
+    # 刷新时走浏览器缓存，秒开页面。
+    app.add_middleware(CacheControlMiddleware)
 
     # ---- 异常处理 ----
     register_exception_handlers(app)

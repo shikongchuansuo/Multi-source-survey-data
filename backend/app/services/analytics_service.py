@@ -9,7 +9,8 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import threading
+from typing import Any, Callable, Dict, List, Tuple
 
 from app.core.exceptions import NotFoundError
 from app.engines import (profile_engine, structures3d_engine, voxel_engine,
@@ -57,6 +58,32 @@ class AnalyticsService:
     def __init__(self) -> None:
         self.risk_repo = get_risk_repo()
         self.manifest_repo = get_manifest_repo()
+        # 进程内结果缓存：底层计算引擎(体素反演/地物聚类/3D 结构/沿线剖面)
+        # 都是数据驱动且不可变，重复请求无需重算。fusion_probe 已用同样范式
+        # 的 _VOX_CACHE，此处把 memo 下沉到 service 层统一管理多端点。
+        self._cache: Dict[str, Any] = {}
+        self._lock = threading.Lock()
+        self._stats: Dict[str, int] = {"miss": 0, "hit": 0}
+
+    def _cached(self, key: str, builder: Callable[[], Any]) -> Any:
+        """线程安全的结果缓存。首次计算后永久命中，返回同一对象引用。
+
+        底层数据(钻孔/物探/DEM)在运行期不变；若数据更新，重启进程即可。
+        FastAPI 序列化时会拷贝一份，返回共享只读 dict 是安全的。
+        """
+        v = self._cache.get(key)
+        if v is not None:
+            self._stats["hit"] += 1
+            return v
+        with self._lock:
+            v = self._cache.get(key)
+            if v is not None:           # 双检：等锁期间可能已被其它线程算好
+                self._stats["hit"] += 1
+                return v
+            v = builder()
+            self._cache[key] = v
+            self._stats["miss"] += 1
+            return v
 
     # ---- 风险多维评分 ----
     def risk_scores(self, rid: str | None = None) -> Dict[str, Any]:
@@ -85,15 +112,17 @@ class AnalyticsService:
 
     # ---- 三维地质结构 ----
     def get_3d_structures(self) -> Dict[str, Any]:
-        return structures3d_engine.build_3d_structures()
+        return self._cached("3d_structures", structures3d_engine.build_3d_structures)
 
     # ---- 物探剖面三维帷幕面 ----
     def get_3d_sections(self) -> Dict[str, Any]:
-        return structures3d_engine.build_3d_sections()
+        return self._cached("3d_sections", structures3d_engine.build_3d_sections)
 
     # ---- 体素地质模型 ----
+    # 体素反演(scipy RBF 空间插值 + 物探软约束)是加载期最重的计算，
+    # 冷启动约 0.5~1.8s。结果由实测钻孔/物探驱动、运行期不变，适合长缓存。
     def get_3d_voxel(self) -> Dict[str, Any]:
-        return voxel_engine.build_voxel_model()
+        return self._cached("3d_voxel", voxel_engine.build_voxel_model)
 
     # ---- 跨模态时空探针 ----
     def fusion_probe(self, x: float, y: float) -> Dict[str, Any]:
@@ -101,37 +130,42 @@ class AnalyticsService:
 
     # ---- 领域本体 + 实例映射 ----
     def get_ontology(self) -> Dict[str, Any]:
-        return ontology_engine.build_instance_mapping()
+        return self._cached("ontology", ontology_engine.build_instance_mapping)
 
     # ---- 地物分类 ----
     def get_landcover(self) -> Dict[str, Any]:
-        return landcover_engine.build_landcover()
+        return self._cached("landcover", landcover_engine.build_landcover)
 
     # ---- 沿线剖面 ----
     def get_route_profile(self) -> Dict[str, Any]:
-        return profile_engine.compute_route_profile()
+        return self._cached("route_profile", profile_engine.compute_route_profile)
 
     # ---- DEM 地形网格（降采样）----
     def get_3d_terrain(self, step: int = 4) -> Dict[str, Any]:
-        import numpy as np  # 局部导入，避免无 numpy 环境下 import 副作用
-        Z = structures3d_engine._Z  # shape (NROWS=400, NCOLS=500)
-        CELL = structures3d_engine.CELL
-        NROWS, NCOLS = Z.shape
+        # 结果随 step 变化，缓存键带上 step（前端只用 step=5，键碰撞几近为零）
         s = max(2, int(step))
-        sub = Z[::s, ::s]
-        out_rows, out_cols = sub.shape
-        elev = [[round(float(sub[r, c]), 1) for c in range(out_cols)]
-                for r in range(out_rows)]
-        assets = self.manifest_repo.get_assets()
-        return {
-            "step": s,
-            "ncols": out_cols,
-            "nrows": out_rows,
-            "elevations": elev,
-            "cell": s * CELL,
-            "extent": {"xmin": 0, "ymin": 0, "xmax": 1000, "ymax": 800},
-            "texture": assets["orthophoto"].get("image"),
-            "coord_offset": {"x": 500, "y": 400, "z": 950},
-            "note": "elevations[row][col]，row 对应 Y(0=南,nrows-1=北)，"
-                    "col 对应 X(0=东0,ncols-1=东1000)",
-        }
+
+        def _build() -> Dict[str, Any]:
+            import numpy as np  # 局部导入，避免无 numpy 环境下 import 副作用
+            Z = structures3d_engine._Z  # shape (NROWS=400, NCOLS=500)
+            CELL = structures3d_engine.CELL
+            NROWS, NCOLS = Z.shape
+            sub = Z[::s, ::s]
+            out_rows, out_cols = sub.shape
+            elev = [[round(float(sub[r, c]), 1) for c in range(out_cols)]
+                    for r in range(out_rows)]
+            assets = self.manifest_repo.get_assets()
+            return {
+                "step": s,
+                "ncols": out_cols,
+                "nrows": out_rows,
+                "elevations": elev,
+                "cell": s * CELL,
+                "extent": {"xmin": 0, "ymin": 0, "xmax": 1000, "ymax": 800},
+                "texture": assets["orthophoto"].get("image"),
+                "coord_offset": {"x": 500, "y": 400, "z": 950},
+                "note": "elevations[row][col]，row 对应 Y(0=南,nrows-1=北)，"
+                        "col 对应 X(0=东0,ncols-1=东1000)",
+            }
+
+        return self._cached(f"3d_terrain:{s}", _build)
