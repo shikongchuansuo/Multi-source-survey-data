@@ -1,0 +1,55 @@
+{
+  "image": "landcover/landcover.png",
+  "extent": {
+    "xmin": 0,
+    "ymin": 0,
+    "xmax": 1000,
+    "ymax": 800
+  },
+  "k": 5,
+  "features": [
+    "R",
+    "G",
+    "B",
+    "ExG过绿指数",
+    "DEM坡度"
+  ],
+  "method": "K-Means 无监督聚类(k=5, seed=42) + 光谱/地形规则语义标注",
+  "classes": [
+    {
+      "cluster": 1,
+      "name": "裸土/耕植区",
+      "color": "#c49a4a",
+      "area_pct": 30.2,
+      "mean_slope_deg": 14.6
+    },
+    {
+      "cluster": 2,
+      "name": "阴影/沟谷区",
+      "color": "#4a5a8a",
+      "area_pct": 18.8,
+      "mean_slope_deg": 28.6
+    },
+    {
+      "cluster": 0,
+      "name": "陡坡裸岩区",
+      "color": "#b34a3a",
+      "area_pct": 18.4,
+      "mean_slope_deg": 29.3
+    },
+    {
+      "cluster": 3,
+      "name": "道路/硬化地表",
+      "color": "#d8d8d0",
+      "area_pct": 18.1,
+      "mean_slope_deg": 13.2
+    },
+    {
+      "cluster": 4,
+      "name": "植被覆盖区",
+      "color": "#2f9e5f",
+      "area_pct": 14.4,
+      "mean_slope_deg": 12.0
+    }
+  ]
+}

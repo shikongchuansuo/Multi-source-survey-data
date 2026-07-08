@@ -34,6 +34,25 @@ def get_3d_voxel(svc: AnalyticsService = Depends(get_analytics_service)):
     return svc.get_3d_voxel()
 
 
+@router.get("/api/fusion/probe")
+def fusion_probe(x: float, y: float,
+                 svc: AnalyticsService = Depends(get_analytics_service)):
+    """跨模态时空探针：任一位置关联全部数据模态的实例数据。"""
+    return svc.fusion_probe(x, y)
+
+
+@router.get("/api/ontology")
+def get_ontology(svc: AnalyticsService = Depends(get_analytics_service)):
+    """勘察领域本体 + 钻孔岩性实例映射（语义一致性）。"""
+    return svc.get_ontology()
+
+
+@router.get("/api/landcover")
+def get_landcover(svc: AnalyticsService = Depends(get_analytics_service)):
+    """正射影像地物分类（K-Means 聚类 + 语义标注）。"""
+    return svc.get_landcover()
+
+
 @router.get("/api/3d/terrain")
 def get_3d_terrain(step: int = 4,
                    svc: AnalyticsService = Depends(get_analytics_service)):

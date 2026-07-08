@@ -17,6 +17,20 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.types import UserDefinedType
+
+
+class _Geometry(UserDefinedType):
+    """PostGIS geometry 列类型（仅 DDL 用，避免引入 geoalchemy2 依赖）。"""
+
+    cache_ok = True
+
+    def __init__(self, geom_type: str, srid: int = 0) -> None:
+        self.geom_type = geom_type
+        self.srid = srid
+
+    def get_col_spec(self, **_) -> str:
+        return f"geometry({self.geom_type}, {self.srid})"
 
 revision: str = "0001_initial"
 down_revision: Union[str, None] = None
@@ -40,8 +54,7 @@ def upgrade() -> None:
         sa.Column("mileage_note", sa.Text()),
         sa.Column("srid", sa.Integer(), server_default="0"),
         # extent_geom: PostGIS Polygon (SRID 0)
-        sa.Column("extent_geom", sa.Text().with_variant(
-            sa.text("geometry(Polygon, 0)"), "postgresql")),
+        sa.Column("extent_geom", _Geometry("Polygon", 0)),
     )
     op.create_index("ix_projects_code", "projects", ["code"], unique=True)
 
@@ -54,8 +67,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(255)),
         sa.Column("start_mileage", sa.String(16)),
         sa.Column("end_mileage", sa.String(16)),
-        sa.Column("centerline_geom", sa.Text().with_variant(
-            sa.text("geometry(LineString, 0)"), "postgresql")),
+        sa.Column("centerline_geom", _Geometry("LineString", 0)),
         sa.Column("portals_json", sa.Text().with_variant(
             sa.dialects.postgresql.JSONB(), "postgresql")),
     )
@@ -73,8 +85,7 @@ def upgrade() -> None:
         sa.Column("anomaly_depth_m", sa.Numeric()),
         sa.Column("image_path", sa.String(255)),
         sa.Column("csv_path", sa.String(255)),
-        sa.Column("axis_geom", sa.Text().with_variant(
-            sa.text("geometry(LineString, 0)"), "postgresql")),
+        sa.Column("axis_geom", _Geometry("LineString", 0)),
     )
     op.create_index("ix_geophysics_lines_project_id",
                     "geophysics_lines", ["project_id"])
@@ -91,10 +102,8 @@ def upgrade() -> None:
         sa.Column("confidence", sa.String(16)),
         sa.Column("mileage", sa.String(16), nullable=False),
         sa.Column("mileage_m", sa.Numeric(), nullable=False),
-        sa.Column("center_geom", sa.Text().with_variant(
-            sa.text("geometry(Point, 0)"), "postgresql")),
-        sa.Column("polygon_geom", sa.Text().with_variant(
-            sa.text("geometry(Polygon, 0)"), "postgresql")),
+        sa.Column("center_geom", _Geometry("Point", 0)),
+        sa.Column("polygon_geom", _Geometry("Polygon", 0)),
         sa.Column("borehole_ids", sa.Text().with_variant(
             sa.dialects.postgresql.ARRAY(sa.Text()), "postgresql")),
         sa.Column("geophysics_line_id", sa.String(16),
@@ -117,8 +126,7 @@ def upgrade() -> None:
         sa.Column("depth_m", sa.Numeric(), nullable=False),
         sa.Column("elevation", sa.Numeric()),
         sa.Column("water_depth_m", sa.Numeric()),
-        sa.Column("location_geom", sa.Text().with_variant(
-            sa.text("geometry(Point, 0)"), "postgresql")),
+        sa.Column("location_geom", _Geometry("Point", 0)),
         sa.Column("layers_json", sa.Text().with_variant(
             sa.dialects.postgresql.JSONB(), "postgresql")),
     )

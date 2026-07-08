@@ -23,15 +23,19 @@ from app.engines.loader import (
     get_profile,
     get_structures3d,
     get_voxel,
+    get_fusion,
+    get_ontology,
+    get_landcover,
     preload_engines,
     release_engines,
 )
 
 __all__ = [
     "get_nlu", "get_report", "get_profile", "get_structures3d", "get_voxel",
+    "get_fusion", "get_ontology", "get_landcover",
     "preload_engines", "release_engines",
     "nlu_engine", "report_engine", "profile_engine", "structures3d_engine",
-    "voxel_engine",
+    "voxel_engine", "fusion_engine", "ontology_engine", "landcover_engine",
 ]
 
 
@@ -59,6 +63,12 @@ class _EngineAccessor:
             return get_structures3d()
         if kind == "voxel":
             return get_voxel()
+        if kind == "fusion":
+            return get_fusion()
+        if kind == "ontology":
+            return get_ontology()
+        if kind == "landcover":
+            return get_landcover()
         raise AttributeError(kind)
 
     def __getattr__(self, name):
@@ -73,3 +83,6 @@ report_engine = _EngineAccessor("report")
 profile_engine = _EngineAccessor("profile")
 structures3d_engine = _EngineAccessor("structures3d")
 voxel_engine = _EngineAccessor("voxel")
+fusion_engine = _EngineAccessor("fusion")
+ontology_engine = _EngineAccessor("ontology")
+landcover_engine = _EngineAccessor("landcover")

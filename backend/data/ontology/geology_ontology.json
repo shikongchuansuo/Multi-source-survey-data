@@ -1,0 +1,99 @@
+{
+  "version": "1.0",
+  "domain": "铁路隧道工程勘察设计",
+  "desc": "勘察设计领域本体：岩性概念树 + 风险类型 + 数据源模态。钻孔分层、体素类别、报告术语、探针语义均由本体统一映射，保证多源数据的语义一致性。",
+  "lithology": [
+    {
+      "code": 0,
+      "concept": "第四系覆盖层",
+      "name_cn": "坡残积覆盖层",
+      "name_en": "Colluvium / Residual Soil",
+      "aliases": ["种植土", "粉质粘土", "粘土", "坡积", "残积", "碎石土", "含碎石", "填土", "杂填土", "卵石"],
+      "weathering_grade": null,
+      "surrounding_rock_class": "Ⅵ",
+      "engineering_property": "松散~稍密，开挖易坍塌，洞口段需超前支护",
+      "color": "#8a6f4d"
+    },
+    {
+      "code": 1,
+      "concept": "全风化岩",
+      "name_cn": "全风化花岗岩",
+      "name_en": "Completely Weathered Granite",
+      "aliases": ["全风化"],
+      "weathering_grade": "W4",
+      "surrounding_rock_class": "Ⅴ",
+      "engineering_property": "岩芯呈砂土状，遇水软化崩解，承载力低",
+      "color": "#c8a878"
+    },
+    {
+      "code": 2,
+      "concept": "强风化岩",
+      "name_cn": "强风化花岗岩",
+      "name_en": "Highly Weathered Granite",
+      "aliases": ["强风化", "碎裂"],
+      "weathering_grade": "W3",
+      "surrounding_rock_class": "Ⅴ~Ⅳ",
+      "engineering_property": "岩芯碎块状，RQD<25，自稳性差需及时支护",
+      "color": "#a08060"
+    },
+    {
+      "code": 3,
+      "concept": "中风化岩",
+      "name_cn": "中(弱)风化花岗岩",
+      "name_en": "Moderately Weathered Granite",
+      "aliases": ["中风化", "弱风化"],
+      "weathering_grade": "W2",
+      "surrounding_rock_class": "Ⅳ~Ⅲ",
+      "engineering_property": "岩体较完整，RQD 40~70，可光面爆破开挖",
+      "color": "#8a8a90"
+    },
+    {
+      "code": 4,
+      "concept": "微风化岩",
+      "name_cn": "微风化基岩",
+      "name_en": "Slightly Weathered Bedrock",
+      "aliases": ["微风化", "新鲜"],
+      "weathering_grade": "W1",
+      "surrounding_rock_class": "Ⅲ~Ⅱ",
+      "engineering_property": "岩体完整坚硬，RQD>70，围岩自稳性好",
+      "color": "#5a5a5e"
+    },
+    {
+      "code": 5,
+      "concept": "构造破碎带",
+      "name_cn": "富水破碎/异常带",
+      "name_en": "Water-rich Fracture Zone",
+      "aliases": ["破碎带", "破碎", "断层", "裂隙密集", "富水"],
+      "weathering_grade": null,
+      "surrounding_rock_class": "Ⅴ~Ⅵ",
+      "engineering_property": "物探低阻富水，突涌水风险高，需超前地质预报+帷幕注浆",
+      "color": "#2878dc"
+    }
+  ],
+  "risk_types": [
+    {
+      "type": "slope_instability",
+      "name_cn": "边坡失稳",
+      "evidence_modalities": ["正射影像", "三维点云", "钻探"],
+      "key_params": ["max_slope_deg", "relief_m", "weathered_depth_m"]
+    },
+    {
+      "type": "water_rich_fracture",
+      "name_cn": "富水破碎带",
+      "evidence_modalities": ["物探", "钻探", "勘察报告"],
+      "key_params": ["rho_min", "water_depth_m", "fracture_width_m", "rqd_pct"]
+    },
+    {
+      "type": "loose_deposit",
+      "name_cn": "松散堆积",
+      "evidence_modalities": ["正射影像", "钻探"],
+      "key_params": ["deposit_depth_m", "avg_slope_deg"]
+    }
+  ],
+  "data_sources": [
+    {"modality": "orthophoto", "name_cn": "正射影像", "spatial_dim": "2D", "role": "地物分类识别 / 风险区圈定"},
+    {"modality": "pointcloud", "name_cn": "三维点云", "spatial_dim": "3D", "role": "地形形态 / 坡度分析"},
+    {"modality": "geophysics", "name_cn": "物探测试", "spatial_dim": "2.5D", "role": "地下电性结构 / 低阻异常识别"},
+    {"modality": "borehole", "name_cn": "钻探测试", "spatial_dim": "1D", "role": "地层分层硬证据 / 岩性标定"}
+  ]
+}

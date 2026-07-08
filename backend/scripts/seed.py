@@ -192,7 +192,7 @@ def main() -> int:
     if is_pg:
         _seed_geometries(engine)
 
-    print("[seed] 装载完成 ✓")
+    print("[seed] 装载完成 OK")
     return 0
 
 

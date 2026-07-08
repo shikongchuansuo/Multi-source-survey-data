@@ -36,6 +36,9 @@ Thumbs.db
 *.pptx
 *.ppt
 
+# 本地演示/验证数据库（SQLite）
+backend/data/*.db
+
 # 环境变量与密钥
 .env
 .env.local

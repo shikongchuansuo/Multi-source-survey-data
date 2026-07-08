@@ -12,7 +12,8 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.core.exceptions import NotFoundError
-from app.engines import profile_engine, structures3d_engine, voxel_engine
+from app.engines import (profile_engine, structures3d_engine, voxel_engine,
+                         fusion_engine, ontology_engine, landcover_engine)
 from app.repositories import get_risk_repo, get_manifest_repo
 
 # 六个评分维度（与原 app.py 完全一致）
@@ -93,6 +94,18 @@ class AnalyticsService:
     # ---- 体素地质模型 ----
     def get_3d_voxel(self) -> Dict[str, Any]:
         return voxel_engine.build_voxel_model()
+
+    # ---- 跨模态时空探针 ----
+    def fusion_probe(self, x: float, y: float) -> Dict[str, Any]:
+        return fusion_engine.probe(x, y)
+
+    # ---- 领域本体 + 实例映射 ----
+    def get_ontology(self) -> Dict[str, Any]:
+        return ontology_engine.build_instance_mapping()
+
+    # ---- 地物分类 ----
+    def get_landcover(self) -> Dict[str, Any]:
+        return landcover_engine.build_landcover()
 
     # ---- 沿线剖面 ----
     def get_route_profile(self) -> Dict[str, Any]:

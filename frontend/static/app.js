@@ -112,7 +112,15 @@ function initMap(){
     }
   });
 
-  // 点击空白处取消高亮（保留选中状态在右侧）
+  // 点击空白处 → 跨模态时空探针（点在矢量要素/标记上时交给要素自身处理）
+  map.on('click', e=>{
+    const t = e.originalEvent && e.originalEvent.target;
+    if(t && (t.tagName === 'path' ||
+             (t.closest && t.closest('.leaflet-marker-icon,.leaflet-popup')))) return;
+    const x = e.latlng.lng, y = e.latlng.lat;
+    if(x < 0 || x > W || y < 0 || y > H) return;
+    runProbe(x, y);
+  });
 }
 
 function portalIcon(kind){
@@ -367,6 +375,14 @@ function initThree(){
   animate();
 }
 
+// 3D 状态栏：各数据源异步加载完成后独立更新自己的片段（避免相互覆盖）
+const THREE_INFO = {};
+function updateThreeInfo(key, text){
+  THREE_INFO[key] = text;
+  $('#three-info').textContent = ['pc','terrain','struct','sections','voxel']
+    .map(k=>THREE_INFO[k]).filter(Boolean).join(' · ');
+}
+
 // 生成文字精灵（始终面向相机的标签）
 function makeTextSprite(text, color, x, y, z, fontsize=40){
   const canvas = document.createElement('canvas');
@@ -408,9 +424,9 @@ function loadPointCloud(){
     STATE.three.points = points;
     STATE.three.scene.add(points);
     const n = geom.attributes.position.count;
-    $('#three-info').textContent = `点云 ${n.toLocaleString()} 点 · 坡度着色`;
+    updateThreeInfo('pc', `点云 ${n.toLocaleString()} 点`);
   }, undefined, (err)=>{
-    $('#three-info').textContent = '⚠ 点云加载失败';
+    updateThreeInfo('pc', '⚠ 点云加载失败');
     console.error(err);
   });
 }
@@ -470,7 +486,7 @@ function loadTerrainMesh(){
         STATE.three.points.material.size = 1.6;
       }
     }, 3000);
-    $('#three-info').textContent = ($('#three-info').textContent || '').replace('· 坡度着色','· 影像地形融合');
+    updateThreeInfo('terrain', '影像地形融合');
   }).catch(e=> console.warn('terrain mesh load failed', e));
 }
 
@@ -568,7 +584,7 @@ function loadGeoStructures(){
     group.add(anomGroup);
 
     scene.add(group);
-    $('#three-info').textContent = $('#three-info').textContent + ' · 含隧道/钻孔/异常体';
+    updateThreeInfo('struct', '隧道/钻孔/异常体');
   }).catch(e=> console.warn('3D structures load failed', e));
 }
 
@@ -628,7 +644,7 @@ function loadGeoSections(){
       STATE.three.geoLayers.sections.push(mesh);
     }
     STATE.three.scene.add(group);
-    $('#three-info').textContent = $('#three-info').textContent + ' · 物探剖面×' + d.lines.length;
+    updateThreeInfo('sections', '物探剖面×' + d.lines.length);
   }).catch(e=> console.warn('3D sections load failed', e));
 }
 
@@ -679,8 +695,9 @@ function loadVoxelModel(){
     const slider = $('#voxel-clip');
     setVoxelClip(slider ? Number(slider.value) : 40);
     renderVoxelLegend(d);
-    $('#three-info').textContent = $('#three-info').textContent +
-      ` · 地质体${(count/1000).toFixed(0)}k体素(${d.source==='demo'?'演示':'交付'})`;
+    const srcLabel = d.source === 'delivered' ? '交付数据' : '钻孔+物探反演';
+    updateThreeInfo('voxel', `地质体${(count/1000).toFixed(0)}k体素(${srcLabel})`);
+    if(d.method) $('#three-info').title = d.method;   // 悬停显示反演方法说明
   }).catch(e=> console.warn('voxel model load failed', e));
 }
 
@@ -728,7 +745,17 @@ function initPicking(renderer, camera){
     for(const g of GL.boreholes) if(g.visible) g.children.forEach(c=>{ if(c.isMesh) targets.push(c); });
     if(GL.sections) for(const s of GL.sections) if(s.visible && s.parent.visible) targets.push(s);
     const hits = ray.intersectObjects(targets, false);
-    if(!hits.length) return;
+    if(!hits.length){
+      // 未点中结构对象 → 落到地形上则触发跨模态探针（3D 端入口）
+      const terr = [];
+      if(STATE.three.terrainMesh && STATE.three.terrainMesh.visible) terr.push(STATE.three.terrainMesh);
+      const th = ray.intersectObjects(terr, false);
+      if(th.length){
+        const p = th[0].point;
+        runProbe(p.x + 500, p.y + 400);
+      }
+      return;
+    }
     const o = hits[0].object;
     if(o.userData.risk_id){
       // 异常体 / 物探剖面 → 联动风险证据链（3D -> 2D -> 证据面板）
@@ -744,6 +771,136 @@ function initPicking(renderer, camera){
       }
       $('#three-info').textContent = `🔩 ${id} · 孔深 ${bh ? bh.depth_m : '—'}m · 已在左图定位`;
     }
+  });
+}
+
+// ============================================================
+// 2f) 跨模态时空探针 —— 任一位置关联全部数据模态（地图/3D 双端触发）
+// ============================================================
+let _probeMarker3D = null;
+
+function addProbeMarker3D(x, y, surfZ, label){
+  if(_probeMarker3D) STATE.three.scene.remove(_probeMarker3D);
+  const px = x - 500, py = y - 400, pz = surfZ - 950;
+  const g = new THREE.Group();
+  // 竖直虚线：从地表上方贯穿到模型底部（示意"一孔见全模态"）
+  const pts = [new THREE.Vector3(px, py, pz + 90), new THREE.Vector3(px, py, -70)];
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineDashedMaterial({color:0xffd080, dashSize:6, gapSize:4}));
+  line.computeLineDistances();
+  g.add(line);
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(4, 10, 8),
+    new THREE.MeshBasicMaterial({color:0xffd080}));
+  dot.position.set(px, py, pz);
+  g.add(dot);
+  g.add(makeTextSprite('📍 ' + label, '#ffd080', px, py, pz + 100, 36));
+  _probeMarker3D = g;
+  STATE.three.scene.add(g);
+}
+
+function addProbeMarker2D(x, y){
+  if(STATE.probeMarker2D) STATE.map.removeLayer(STATE.probeMarker2D);
+  STATE.probeMarker2D = L.marker(xyToLatLng([x, y]), {
+    icon: L.divIcon({className:'probe-icon',
+      html:'<div style="font-size:22px;color:#ffd080;text-shadow:0 0 4px #000,0 0 4px #000;font-weight:700">✛</div>',
+      iconSize:[22,22], iconAnchor:[11,11]}),
+    zIndexOffset: 1200,
+  }).addTo(STATE.map);
+}
+
+async function runProbe(x, y){
+  $('#ev-target').textContent = '📍 探针检索中…';
+  try{
+    const d = await getJSON(`/api/fusion/probe?x=${x.toFixed(1)}&y=${y.toFixed(1)}`);
+    addProbeMarker2D(d.x, d.y);
+    addProbeMarker3D(d.x, d.y, d.terrain.surface_z, d.mileage);
+    renderProbe(d);
+  }catch(e){
+    console.error(e);
+    $('#ev-target').textContent = '探针失败';
+  }
+}
+
+function renderProbe(d){
+  $('#ev-target').textContent = '📍 ' + d.mileage + ' 探针';
+  // 风险区归属
+  const riskHtml = d.risk_inside.length
+    ? d.risk_inside.map(r=>`<span class="ref-chip probe-risk" data-rid="${r.id}">⚠ ${r.mileage} ${r.type_cn}（${r.risk_level}）</span>`).join('')
+    : `<span style="color:var(--text-dim)">未落入风险区${d.risk_nearest ? `（最近 ${d.risk_nearest.type_cn} 距 ${d.risk_nearest.distance_m}m）` : ''}</span>`;
+  // 体素岩性柱（本体语义，悬停显示工程性质）
+  const lith = d.lithology_column.map(s=>{
+    const th = (s.top_z - s.bottom_z).toFixed(0);
+    return `<div class="probe-lith" title="${escapeAttr(s.engineering_property || '')}">
+      <span class="pl-sw" style="background:${s.color}"></span>
+      <span class="pl-name">${escapeHtml(s.name_cn)}</span>
+      <span class="pl-rng">${s.top_z}~${s.bottom_z}m</span>
+      <span class="pl-th">厚${th}m</span>
+      ${s.surrounding_rock_class ? `<span class="pl-cls">围岩${s.surrounding_rock_class}</span>` : ''}
+    </div>`;
+  }).join('') || '<div style="color:var(--text-dim);font-size:11px">该位置无体素数据</div>';
+  // 物探
+  const geo = d.geophysics.map(g=>`
+    <div class="probe-block">
+      <div class="pb-head">📡 ${escapeHtml(g.id)} ${escapeHtml(g.method)} · 垂距 ${g.distance_m}m · 桩号 ${g.station_m}m · 最低 <b style="color:var(--warn)">${g.rho_min} Ω·m</b>
+        ${g.related_risk ? `<span class="ref-chip probe-risk" data-rid="${g.related_risk}">🔗 关联风险</span>` : ''}</div>
+      <div id="probe-rho-${g.id}" style="width:100%;height:110px"></div>
+    </div>`).join('') ||
+    `<div style="color:var(--text-dim);font-size:11px">📡 80m 范围内无物探测线覆盖</div>`;
+  // 钻孔
+  const bhs = d.boreholes.map(b=>
+    `<span class="ref-chip probe-bh" data-bid="${b.id}">🔩 ${b.id}（${b.distance_m}m · 孔深${b.depth_m}m）</span>`).join('');
+
+  $('#evidence-content').innerHTML = `
+    <div class="ev-header">
+      <div class="ev-name">📍 跨模态时空探针</div>
+      <div class="ev-meta">
+        <span class="ev-tag">里程 ${d.mileage}</span>
+        <span class="ev-tag">X ${d.x}m · Y ${d.y}m</span>
+        <span class="ev-tag">高程 ${d.terrain.surface_z}m</span>
+        <span class="ev-tag">坡度 ${d.terrain.slope_deg}°</span>
+      </div>
+    </div>
+    <div class="probe-sec"><div class="ps-title">🛰 风险区归属（影像圈定）</div>${riskHtml}</div>
+    <div class="probe-sec"><div class="ps-title">🧱 体素岩性柱（钻孔+物探反演 · 本体语义 · 悬停看工程性质）</div>${lith}</div>
+    <div class="probe-sec"><div class="ps-title">📡 物探电阻率（该位置投影桩号）</div>${geo}</div>
+    <div class="probe-sec"><div class="ps-title">🔩 最近钻孔（点击定位）</div>${bhs}</div>
+    <div style="font-size:10px;color:var(--text-dim);margin-top:8px;line-height:1.7">
+      💡 ${escapeHtml(d.note)}。地图空白处或三维地形上单击任意位置即可探针。
+    </div>`;
+  // 物探曲线迷你图
+  for(const g of d.geophysics) renderProbeRho(g);
+  // 联动绑定
+  $$('.probe-risk').forEach(ch=> ch.addEventListener('click', ()=> selectRisk(ch.dataset.rid)));
+  $$('.probe-bh').forEach(ch=> ch.addEventListener('click', ()=>{
+    const bh = STATE.boreholeCache && STATE.boreholeCache[ch.dataset.bid];
+    if(bh && STATE.map){
+      STATE.map.setView(xyToLatLng(bh.xy), Math.max(STATE.map.getZoom(), 1));
+      const mk = STATE.bhMarkers && STATE.bhMarkers[ch.dataset.bid];
+      if(mk) mk.openPopup();
+    }
+  }));
+}
+
+function renderProbeRho(g){
+  const el = $('#probe-rho-' + g.id);
+  if(!el || typeof echarts === 'undefined') return;
+  const chart = echarts.init(el);
+  chart.setOption({
+    tooltip: { trigger:'axis', backgroundColor:'rgba(20,29,46,.95)', borderColor:'#3d8bff',
+               textStyle:{color:'#dfe7f3',fontSize:10},
+               formatter: p=> `深度 ${g.depths[p[0].dataIndex]}m<br/>电阻率 <b>${p[0].value} Ω·m</b>` },
+    grid: { left:42, right:8, top:8, bottom:20 },
+    xAxis: { type:'category', data:g.depths, name:'深度m', nameLocation:'end',
+             nameTextStyle:{color:'#8ea0bd',fontSize:9}, axisLabel:{color:'#8ea0bd',fontSize:8} },
+    yAxis: { type:'value', axisLabel:{color:'#8ea0bd',fontSize:8},
+             splitLine:{lineStyle:{color:'#2c3a55'}} },
+    series: [{ type:'line', data:g.rho, smooth:true, symbol:'none',
+      lineStyle:{width:1.8, color:'#5fd4d4'},
+      areaStyle:{opacity:.12, color:'#5fd4d4'},
+      markPoint:{ data:[{type:'min', name:'最低'}], symbolSize:34,
+        label:{fontSize:8}, itemStyle:{color:'#ff7a3d'} },
+    }],
   });
 }
 
@@ -1419,6 +1576,32 @@ function bindEvents(){
   toggle('lyr-geo', STATE.layers.geo);
   toggle('lyr-risk', STATE.layers.risk);
   $('#lyr-ortho').addEventListener('change', e=> STATE.layers.ortho.setOpacity(e.target.checked?1:0));
+
+  // 地物分类图层（首次开启时拉取分类结果并生成图例）
+  $('#lyr-lc').addEventListener('change', async e=>{
+    if(e.target.checked){
+      if(!STATE.layers.lc){
+        try{
+          const d = await getJSON('/api/landcover');
+          STATE.layers.lc = L.imageOverlay('/data/'+d.image, [[800,0],[0,1000]],
+                                           {opacity:.6, zIndex:11});
+          const lg = $('.map-legend');
+          for(const c of d.classes){
+            const div = document.createElement('div');
+            div.className = 'lg-item lc-item';
+            div.title = `平均坡度 ${c.mean_slope_deg}° · ${d.method}`;
+            div.innerHTML = `<span class="dot" style="background:${c.color}"></span>${c.name} ${c.area_pct}%`;
+            lg.appendChild(div);
+          }
+        }catch(err){ console.warn('landcover load failed', err); return; }
+      }
+      STATE.layers.lc.addTo(STATE.map);
+      $$('.lc-item').forEach(el=> el.style.display='');
+    } else if(STATE.layers.lc){
+      STATE.map.removeLayer(STATE.layers.lc);
+      $$('.lc-item').forEach(el=> el.style.display='none');
+    }
+  });
 
   // 风险等级筛选
   $('#risk-filter').addEventListener('change', e=>{

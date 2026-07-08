@@ -34,6 +34,3 @@ class RiskObject(Base):
     evidence_json: Mapped[dict] = mapped_column(JSONVariant, default=dict)
     interpretation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     design_suggestion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-
-Index("ix_risk_objects_mileage_m", RiskObject.mileage_m)

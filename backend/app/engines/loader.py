@@ -45,6 +45,9 @@ _ENGINE_MODULES = {
     "profile": "profile",
     "structures3d": "structures3d",
     "voxel": "voxel_model",
+    "fusion": "fusion_probe",
+    "ontology": "ontology",
+    "landcover": "landcover",
 }
 
 
@@ -87,6 +90,21 @@ def get_structures3d():
 def get_voxel():
     """体素地质模型引擎（= backend/voxel_model.py）。"""
     return _load("voxel")
+
+
+def get_fusion():
+    """跨模态时空探针引擎（= backend/fusion_probe.py）。"""
+    return _load("fusion")
+
+
+def get_ontology():
+    """勘察领域本体引擎（= backend/ontology.py）。"""
+    return _load("ontology")
+
+
+def get_landcover():
+    """地物分类引擎（= backend/landcover.py）。"""
+    return _load("landcover")
 
 
 def preload_engines() -> None:
