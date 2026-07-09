@@ -88,6 +88,144 @@ def collect_full_context() -> Dict[str, Any]:
 
 
 # #############################################################################
+#  B0. 处置建议规则引擎 —— 按 type + risk_level 动态生成，无硬编码里程
+# #############################################################################
+# 每种风险类型一套处置策略；每条策略内按 risk_level 给出差异化措辞。
+# 里程/类型等具体值在调用时从风险对象取，避免写死在源码里。
+# 新增风险类型时只需在此表追加一项。
+_RECOMMEND_RULES: Dict[str, Dict[str, Any]] = {
+    "slope_instability": {
+        "title": "洞口边坡失稳",
+        "by_level": {
+            "高": [
+                "进洞前必须完成边坡处治：长管棚超前支护 + 锚网喷 + 截排水天沟，坡脚设抗滑桩。",
+                "超前地质预报全程跟进：TSP + 地质雷达 + 超前钻孔，确认松动岩体范围。",
+                "建立坡体位移监测，变形速率预警值按 {weathered_depth_m}m 风化层深度动态核定。",
+            ],
+            "中高": [
+                "洞口段加强支护：管棚 + 锚网喷，跟进截排水措施。",
+                "施工期坡体位移监测，动态调整支护参数。",
+            ],
+            "中": [
+                "常规锚网喷支护，做好截排水。",
+                "施工期位移监测。",
+            ],
+        },
+    },
+    "water_rich_fracture": {
+        "title": "富水破碎带",
+        "by_level": {
+            "高": [
+                "超前帷幕注浆 (加固圈 ≥5m) + 双层初期支护，预留注浆管。",
+                "备用抽排水能力 ≥200m³/h，富水段设置防水闸门。",
+                "超前预报锁定破碎带宽度 (现估 {fracture_width_m}m) 与渗透性。",
+            ],
+            "中高": [
+                "超前帷幕注浆 + 双层初期支护，预留注浆管。",
+                "施工配备抽排水能力 ≥200m³/h，设置防水闸门。",
+                "超前地质预报 (TSP + 地质雷达 + 超前钻孔) 锁定破碎带宽度 (现估 {fracture_width_m}m)。",
+            ],
+            "中": [
+                "加强初期支护，做好排水预案。",
+                "超前预报确认富水性。",
+            ],
+        },
+    },
+    "loose_deposit": {
+        "title": "松散堆积",
+        "by_level": {
+            "高": [
+                "明洞基础换填碎石，钻孔灌注桩嵌岩穿过堆积层 (现估 {deposit_depth_m}m)。",
+                "基础沉降监测，控制桩间距与嵌岩深度。",
+                "做好地表截排水，防止堆积层进一步软化。",
+            ],
+            "中高": [
+                "基础换填 + 灌注桩嵌岩，穿过堆积层 (现估 {deposit_depth_m}m)。",
+                "基础沉降监测。",
+            ],
+            "中": [
+                "基础换填处理，控制沉降。",
+                "施工期沉降监测。",
+            ],
+        },
+    },
+}
+# 兜底策略：未登记类型按等级给通用建议
+_RECOMMEND_FALLBACK: Dict[str, List[str]] = {
+    "高": ["进洞前完成专项处治；超前地质预报全程跟进；监控量测体系到位。"],
+    "中高": ["加强支护与超前预报；施工期监控量测。"],
+    "中": ["按常规措施处理；施工期监测。"],
+}
+
+# 优先级排序：高风险优先处置（与 LEVEL_RANK 一致）
+_PRIORITY_ORDER = ["高", "中高", "中"]
+
+
+def _fmt_bullets(bullets: List[str], params: Dict[str, Any]) -> List[str]:
+    """用 evidence.params 填充建议里的 {占位符}，缺失占位符原样保留。"""
+    out = []
+    for b in bullets:
+        try:
+            out.append(b.format(**params) if params else b)
+        except (KeyError, IndexError):
+            out.append(b)
+    return out
+
+
+def build_recommendations(risks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """根据全部风险对象动态生成处置建议清单。
+
+    返回结构（每项对应"按优先级处置"的一条）::
+
+        [{
+            "risk": <风险对象>,
+            "title": "K12+380 洞口边坡失稳",
+            "level_label": "高（优先）",
+            "bullets": ["...", "..."],
+            "priority": 0,   # 数字越小优先级越高
+        }, ...]
+    """
+    ranked = sorted(risks, key=lambda r: (_PRIORITY_ORDER.index(r["risk_level"])
+                                          if r["risk_level"] in _PRIORITY_ORDER else 99,
+                                          r.get("mileage_m", 0)))
+    out = []
+    for i, r in enumerate(ranked):
+        rule = _RECOMMEND_RULES.get(r["type"], {})
+        bullets = rule.get("by_level", {}).get(r["risk_level"]) or _RECOMMEND_FALLBACK.get(
+            r["risk_level"], _RECOMMEND_FALLBACK["中"])
+        params = r.get("evidence", {}).get("params", {})
+        title_prefix = rule.get("title", r.get("type_cn", r["type"]))
+        out.append({
+            "risk": r,
+            "title": f"{r['mileage']} {title_prefix}",
+            "level_label": (r["risk_level"] + "（首要风险）") if i == 0 else r["risk_level"],
+            "bullets": _fmt_bullets(bullets, params),
+            "priority": i,
+        })
+    return out
+
+
+def _overall_recommendations(risks: List[Dict[str, Any]]) -> List[str]:
+    """全线总体建议（通用 + 分风险要点），无硬编码里程。
+
+    输出形如：
+      "按风险等级分优先级处置：首要为 K12+380 洞口边坡失稳（高）。"
+      之后再逐条列出每个风险的关键处置要点。
+    """
+    recs = build_recommendations(risks)
+    if not recs:
+        return ["暂无识别风险，按常规措施施工。"]
+    lines = []
+    top = recs[0]
+    lines.append(f"按风险等级分优先级处置：首要为 {top['title']}（{top['risk']['risk_level']}）。")
+    for rec in recs:
+        for b in rec["bullets"]:
+            lines.append(f"{rec['title']}（{rec['risk']['risk_level']}）：{b}")
+    lines.append("监控量测体系：建立坡体位移、洞内收敛、地下水动态监测，动态调整支护。")
+    return lines
+
+
+# #############################################################################
 #  B. Markdown 生成器
 # #############################################################################
 def _md_risk_section(ctx: Dict, level: int = 2) -> str:
@@ -104,6 +242,8 @@ def _md_risk_section(ctx: Dict, level: int = 2) -> str:
     md.append(f"- **关联物探**：{geo['name'] if geo else '—'}\n")
 
     md.append(f"{h}# 多源证据\n")
+    if e.get("params"):
+        md.append(f"> **实测量化指标（取自 evidence.params，为报告唯一数值来源）**：{_quant_summary(e['params'])}\n")
     md.append("| 数据源 | 证据描述 |")
     md.append("|---|---|")
     md.append(f"| 🛰 正射影像 | {e['image']} |")
@@ -113,7 +253,7 @@ def _md_risk_section(ctx: Dict, level: int = 2) -> str:
     md.append(f"| 📄 勘察报告 | {e['report']} |\n")
 
     if e.get("params"):
-        md.append(f"{h}# 关键参数\n")
+        md.append(f"{h}# 关键参数（实测值，报告唯一数值来源）\n")
         md.append("| 参数 | 数值 |")
         md.append("|---|---|")
         for k, v in e["params"].items():
@@ -147,6 +287,29 @@ def _param_label(k):
             "water_depth_m": "地下水位埋深(m)", "fracture_width_m": "破碎带宽度(m)",
             "rqd_pct": "RQD(%)", "avg_slope_deg": "平均坡度(°)",
             "deposit_depth_m": "堆积层厚度(m)"}.get(k, k)
+
+
+# params 键的单位标注（用于量化摘要行的内联展示）
+_PARAM_UNIT = {
+    "max_slope_deg": "°", "relief_m": "m", "rho_min": "Ω·m",
+    "weathered_depth_m": "m", "water_depth_m": "m", "fracture_width_m": "m",
+    "rqd_pct": "%", "avg_slope_deg": "°", "deposit_depth_m": "m",
+}
+
+
+def _quant_summary(params: Dict[str, Any]) -> str:
+    """由 evidence.params 生成量化摘要行（params 为报告数值的唯一来源）。
+
+    返回内联短语，如："最大坡度 38° / 相对高差 52m / 最低电阻率 180Ω·m"。
+    上层将其作为"实测量化指标"展示，与定性文字叙述分离。
+    """
+    if not params:
+        return ""
+    parts = []
+    for k, v in params.items():
+        unit = _PARAM_UNIT.get(k, "")
+        parts.append(f"{_param_label(k)} {v}{unit}")
+    return " / ".join(parts)
 
 
 def generate_risk_markdown(rid: str) -> str:
@@ -228,10 +391,10 @@ def generate_full_markdown() -> str:
     if concl:
         md.append(concl["content"] + "\n")
     md.append("### 综合建议\n")
-    md.append("1. **按风险等级分优先级处置**：高风险区（K12+380 边坡）应在进洞前完成处治；")
-    md.append("2. **超前地质预报全过程跟进**：特别是富水破碎带段，采用 TSP + 地质雷达 + 超前钻孔；")
-    md.append("3. **监控量测体系**：建立坡体位移、洞内收敛、地下水动态监测，动态调整支护；")
-    md.append("4. **应急准备**：富水段备用抽排水能力 ≥200m³/h，设置防水闸门。\n")
+    recs = _overall_recommendations(RISKS)
+    for i, line in enumerate(recs, 1):
+        md.append(f"{i}. {line}")
+    md.append("")
 
     md.append("---\n")
     md.append("*本报告由多源勘察数据联动展示与证据链追溯系统基于正射影像、三维点云、"
@@ -313,6 +476,12 @@ def _docx_risk_section(doc, ctx: Dict):
 
     # 多源证据表
     _add_heading_cn(doc, "多源证据", level=3)
+    if e.get("params"):
+        p = doc.add_paragraph()
+        run = p.add_run(f"实测量化指标（取自 evidence.params，为报告唯一数值来源）：{_quant_summary(e['params'])}")
+        run.bold = True
+        run.font.size = Pt(10)
+        run.font.color.rgb = RGBColor(0x1F, 0x4E, 0x79)
     _add_table(doc,
         ["数据源", "证据描述"],
         [["正射影像", e["image"]], ["三维点云", e["pointcloud"]],
@@ -321,7 +490,7 @@ def _docx_risk_section(doc, ctx: Dict):
 
     # 关键参数
     if e.get("params"):
-        _add_heading_cn(doc, "关键参数", level=3)
+        _add_heading_cn(doc, "关键参数（实测值，报告唯一数值来源）", level=3)
         _add_table(doc, ["参数", "数值"],
                    [[_param_label(k), str(v)] for k, v in e["params"].items()])
 
@@ -450,10 +619,7 @@ def generate_full_docx() -> bytes:
     if concl:
         doc.add_paragraph(concl["content"])
     _add_heading_cn(doc, "综合建议", level=2)
-    for s in ["按风险等级分优先级处置：高风险区（K12+380 边坡）应在进洞前完成处治。",
-              "超前地质预报全过程跟进：特别是富水破碎带段，采用 TSP + 地质雷达 + 超前钻孔。",
-              "监控量测体系：建立坡体位移、洞内收敛、地下水动态监测，动态调整支护。",
-              "应急准备：富水段备用抽排水能力 ≥200m³/h，设置防水闸门。"]:
+    for s in _overall_recommendations(RISKS):
         doc.add_paragraph(s, style="List Number")
 
     doc.add_paragraph()
