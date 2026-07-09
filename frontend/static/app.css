@@ -171,6 +171,10 @@ body{
   border-radius:8px;padding:0 6px;opacity:.85}
 .probe-block{background:var(--bg2);border-radius:6px;padding:6px 8px;margin-bottom:6px}
 .probe-block .pb-head{font-size:11px;color:var(--text);margin-bottom:2px}
+.probe-suggest{
+  background:rgba(255,208,128,.08);border-left:3px solid #ffd080;padding:8px 10px 8px 24px;
+  border-radius:5px;font-size:11px;line-height:1.8;color:var(--text);
+}
 
 /* ---------- 证据链面板 ---------- */
 .evidence-content{flex:1;overflow-y:auto;padding:12px}
@@ -259,6 +263,11 @@ body{
 .axis-risk.r-高{background:var(--danger);color:var(--danger)}
 .axis-risk.r-中高{background:var(--warn);color:var(--warn)}
 .axis-risk.r-中{background:#ffcd3d;color:#ffcd3d}
+.axis-probe{
+  position:absolute;top:50%;transform:translate(-50%,-50%) rotate(45deg);
+  width:11px;height:11px;background:#ffd080;border:2px solid #fff;
+  box-shadow:0 0 8px rgba(255,208,128,.8);z-index:3;pointer-events:none;transition:left .2s;
+}
 .axis-cursor{
   position:absolute;top:0;bottom:0;width:2px;background:var(--accent2);
   box-shadow:0 0 8px var(--accent2);pointer-events:none;opacity:0;transition:opacity .2s;
@@ -528,3 +537,40 @@ body{
   .workspace{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;height:calc(100vh - 58px - 240px)}
   .three-panel{grid-column:1/3}
 }
+
+/* ---------- 顶部栏按钮 ---------- */
+.topbar-btn{
+  background:var(--panel2);color:var(--text);border:1px solid var(--border);
+  padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;
+  transition:.15s;font-weight:600;
+}
+.topbar-btn:hover{background:rgba(61,139,255,.22);border-color:var(--accent)}
+.topbar-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+/* ---------- 分屏联动覆盖层 ---------- */
+.split-overlay{
+  display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:2000;
+  background:#0a0f1a;
+}
+.split-overlay.active{display:grid;grid-template-columns:1.4fr 1fr}
+.split-left,.split-right{
+  display:flex;flex-direction:column;overflow:hidden;min-width:0;
+}
+.split-left{border-right:1px solid var(--border)}
+.split-head{
+  height:38px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;
+  padding:0 14px;background:var(--panel);border-bottom:1px solid var(--border);
+  font-size:13px;color:var(--text);font-weight:600;
+}
+#split-three-slot{flex:1;position:relative;overflow:hidden}
+/* 三维容器被移入后撑满 */
+#split-three-slot #three-container{width:100%;height:100%}
+#split-three-slot .three-toolbar{top:48px}
+#split-three-slot .three-layers{top:96px}
+/* 证据面板被移入分屏右栏后撑满 */
+#split-evidence-slot{flex:1;overflow:hidden;display:flex;flex-direction:column}
+#split-evidence-slot .evidence-panel{
+  height:100%;max-height:none;border:none;box-shadow:none;display:flex;flex-direction:column;
+}
+#split-evidence-slot .evidence-content{flex:1;overflow-y:auto}
+.split-probe-content .report-empty{padding:40px 16px;text-align:center}

@@ -18,6 +18,8 @@ const STATE = {
   three: { scene:null, camera:null, renderer:null, controls:null, points:null, slopeAttr:null },
   // 物探图表 (ECharts)
   geoChart: null,
+  // 分屏联动模式
+  splitActive: false,
 };
 
 const COLORS = {
@@ -49,14 +51,18 @@ async function init(){
     STATE.risks = STATE.manifest.risks;
     $('#scenario').textContent = STATE.manifest.project.scenario;
     renderDataSources(STATE.manifest.data_sources);
-    initMap();
-    initThree();
-    initMileageAxis();
-    renderReportSelect();
-    bindEvents();
+    // 各模块独立初始化：单个失败不阻塞其余，保证页面基本可用
+    const _safe = (name, fn)=>{ try{ fn(); }catch(err){ console.error('['+name+'] 初始化失败:', err); } };
+    _safe('initMap', initMap);
+    _safe('initThree', initThree);
+    _safe('initMileageAxis', initMileageAxis);
+    _safe('renderReportSelect', renderReportSelect);
+    _safe('bindEvents', bindEvents);
     $('#loading').classList.add('hide');
   }catch(e){
-    $('#loading p').innerHTML = '⚠ 加载失败：'+e.message+'<br>请确认后端服务已在 <b>http://localhost:8000</b> 运行';
+    $('#loading p').innerHTML = '⚠ 加载失败：'+e.message+'<br>请确认后端服务已在 <b>http://localhost:8000</b> 运行'
+      + '<br><br><details style="text-align:left;font-size:11px;color:#9fb"><summary>错误堆栈</summary><pre style="white-space:pre-wrap">'
+      + escapeHtml(e.stack || e.message) + '</pre></details>';
     console.error(e);
   }
 }
@@ -661,32 +667,43 @@ function loadVoxelModel(){
     const catColor = {};
     for(const c of d.categories) catColor[c.code] = new THREE.Color(c.color);
     const fallback = new THREE.Color('#777777');
-    // 实体体素计数
-    let count = 0;
-    for(let i = 0; i < d.data.length; i++) if(d.data[i] !== d.nodata) count++;
-    // 剖切平面：保留 x <= constant 的部分
-    const clip = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
-    STATE.three.geoLayers.voxelClip = clip;
-    const boxGeom = new THREE.BoxGeometry(dx*.96, dy*.96, dz*.9);
-    const mat = new THREE.MeshLambertMaterial({ clippingPlanes:[clip] });
-    const inst = new THREE.InstancedMesh(boxGeom, mat, count);
-    inst.name = 'voxelModel';
-    const m4 = new THREE.Matrix4();
-    let k = 0;
-    for(let iz = 0; iz < nz; iz++){
-      for(let iy = 0; iy < ny; iy++){
-        for(let ix = 0; ix < nx; ix++){
+    // 沿 Z 方向对同岩性做游程合并（同一 (ix,iy) 列上连续相同 code 的体素
+    // 合成一个高盒子）。基岩等大厚层原本会拆成几十个堆叠小方块，逐帧都要
+    // 参与顶点/光照/裁剪面计算；合并后实例数从约 7.5 万降到约 7 千
+    // （实测 ~10 倍），视觉上完全等价（同类体素本就无缝拼接），
+    // 是"开启地质体后很卡"的主要优化点。
+    const segs = [];
+    for(let iy = 0; iy < ny; iy++){
+      for(let ix = 0; ix < nx; ix++){
+        let iz = 0;
+        while(iz < nz){
           const v = d.data[(iz*ny + iy)*nx + ix];
-          if(v === d.nodata) continue;
-          m4.setPosition(ox + (ix+.5)*dx - off.x,
-                         oy + (iy+.5)*dy - off.y,
-                         oz + (iz+.5)*dz - off.z);
-          inst.setMatrixAt(k, m4);
-          inst.setColorAt(k, catColor[v] || fallback);
-          k++;
+          if(v === d.nodata){ iz++; continue; }
+          let len = 1;
+          while(iz+len < nz && d.data[((iz+len)*ny + iy)*nx + ix] === v) len++;
+          segs.push([ix, iy, iz, len, v]);
+          iz += len;
         }
       }
     }
+    // 剖切平面：保留 x <= constant 的部分
+    const clip = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
+    STATE.three.geoLayers.voxelClip = clip;
+    const boxGeom = new THREE.BoxGeometry(dx*.96, dy*.96, 1);
+    const mat = new THREE.MeshLambertMaterial({ clippingPlanes:[clip] });
+    const inst = new THREE.InstancedMesh(boxGeom, mat, segs.length);
+    inst.name = 'voxelModel';
+    const m4 = new THREE.Matrix4();
+    const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+    segs.forEach(([ix, iy, iz0, len, v], k)=>{
+      pos.set(ox + (ix+.5)*dx - off.x,
+              oy + (iy+.5)*dy - off.y,
+              oz + (iz0 + len/2)*dz - off.z);
+      scl.set(1, 1, len*dz*.9);
+      m4.compose(pos, quat, scl);
+      inst.setMatrixAt(k, m4);
+      inst.setColorAt(k, catColor[v] || fallback);
+    });
     inst.instanceMatrix.needsUpdate = true;
     if(inst.instanceColor) inst.instanceColor.needsUpdate = true;
     STATE.three.geoLayers.voxel = inst;
@@ -695,8 +712,9 @@ function loadVoxelModel(){
     const slider = $('#voxel-clip');
     setVoxelClip(slider ? Number(slider.value) : 40);
     renderVoxelLegend(d);
+    const rawCount = d.data.reduce((n, v)=> v === d.nodata ? n : n+1, 0);
     const srcLabel = d.source === 'delivered' ? '交付数据' : '钻孔+物探反演';
-    updateThreeInfo('voxel', `地质体${(count/1000).toFixed(0)}k体素(${srcLabel})`);
+    updateThreeInfo('voxel', `地质体${(rawCount/1000).toFixed(0)}k体素→${segs.length}绘制体(${srcLabel})`);
     if(d.method) $('#three-info').title = d.method;   // 悬停显示反演方法说明
   }).catch(e=> console.warn('voxel model load failed', e));
 }
@@ -778,6 +796,50 @@ function initPicking(renderer, camera){
 // 2f) 跨模态时空探针 —— 任一位置关联全部数据模态（地图/3D 双端触发）
 // ============================================================
 let _probeMarker3D = null;
+let _probeRadarChart = null;
+
+function clearProbeMarkers(){
+  if(STATE.probeMarker2D){ STATE.map.removeLayer(STATE.probeMarker2D); STATE.probeMarker2D = null; }
+  if(_probeMarker3D){ STATE.three.scene.remove(_probeMarker3D); _probeMarker3D = null; }
+  const ax = $('#axis-probe'); if(ax) ax.remove();
+}
+
+// 探针点击一个自由点时，先清掉上一次选中的正式风险区高亮，
+// 避免"两条证据链"同屏叠加造成混淆（selectRisk 反向也会清探针标记）。
+function clearRiskHighlight(){
+  for(const rid in STATE.riskPolygons){
+    const r = STATE.risks.find(x=>x.id===rid);
+    const c = COLORS[r.risk_level] || COLORS['中'];
+    STATE.riskPolygons[rid].setStyle({weight:2.5, fillOpacity:.25, color:c.stroke});
+  }
+  $$('.axis-risk').forEach(d=> d.classList.remove('active'));
+  if(riskBox3D){ STATE.three.scene.remove(riskBox3D); riskBox3D = null; }
+  STATE.selectedRisk = null;
+}
+
+function setAxisProbeMarker(x){
+  const track = $('#mileage-track');
+  let dot = $('#axis-probe');
+  if(!dot){
+    dot = document.createElement('div');
+    dot.className = 'axis-probe';
+    dot.id = 'axis-probe';
+    track.appendChild(dot);
+  }
+  dot.style.left = (x/1000*100) + '%';
+  dot.title = '📍 探针位置';
+}
+
+// 探针版"flyTo"：相机飞到该点上方，与 flyToRisk 同一套动画，
+// 使自由点击的位置和正式风险区获得同等的 3D 定位联动。
+function flyToProbe(x, y){
+  const cx = x - 500, cy = y - 400;
+  const cam = STATE.three.camera, ctrl = STATE.three.controls;
+  const target = new THREE.Vector3(cx, cy, 0);
+  const dist = 200;
+  const newPos = new THREE.Vector3(cx + dist*0.8, cy - dist*0.9, dist);
+  animateCam(cam.position.clone(), newPos, ctrl.target.clone(), target, 60);
+}
 
 function addProbeMarker3D(x, y, surfZ, label){
   if(_probeMarker3D) STATE.three.scene.remove(_probeMarker3D);
@@ -811,11 +873,18 @@ function addProbeMarker2D(x, y){
 
 async function runProbe(x, y){
   $('#ev-target').textContent = '📍 探针检索中…';
+  // 探针是"自由点"证据链的入口：先退出上一次选中的正式风险区高亮，
+  // 两条证据链(风险区/探针)互斥展示，避免同屏叠加造成混淆。
+  clearRiskHighlight();
   try{
     const d = await getJSON(`/api/fusion/probe?x=${x.toFixed(1)}&y=${y.toFixed(1)}`);
     addProbeMarker2D(d.x, d.y);
     addProbeMarker3D(d.x, d.y, d.terrain.surface_z, d.mileage);
+    flyToProbe(d.x, d.y);           // 3D 定位，与 flyToRisk 对等
+    setAxisProbeMarker(d.x);        // 里程轴游标同步
     renderProbe(d);
+    renderProbeRadar(d);
+    renderInterpretProbe(d);        // 底部"风险解释"页响应探针，形成完整证据链闭环
   }catch(e){
     console.error(e);
     $('#ev-target').textContent = '探针失败';
@@ -850,29 +919,41 @@ function renderProbe(d){
   // 钻孔
   const bhs = d.boreholes.map(b=>
     `<span class="ref-chip probe-bh" data-bid="${b.id}">🔩 ${b.id}（${b.distance_m}m · 孔深${b.depth_m}m）</span>`).join('');
+  // 处置建议（复用 disposal_rules，与报告生成同源）
+  const suggest = (d.design_suggestion||[]).map(b=>`<li>${escapeHtml(b)}</li>`).join('');
 
-  $('#evidence-content').innerHTML = `
+  // 渲染到证据面板内容区（分屏模式下证据面板整体在右栏，跟着走）
+  const target = $('#evidence-content');
+  target.innerHTML = `
     <div class="ev-header">
       <div class="ev-name">📍 跨模态时空探针</div>
       <div class="ev-meta">
+        <span class="ev-tag level-${d.level}">综合评估 ${d.level}</span>
+        <span class="ev-tag">${escapeHtml(d.dominant_type_cn)}倾向</span>
         <span class="ev-tag">里程 ${d.mileage}</span>
         <span class="ev-tag">X ${d.x}m · Y ${d.y}m</span>
         <span class="ev-tag">高程 ${d.terrain.surface_z}m</span>
         <span class="ev-tag">坡度 ${d.terrain.slope_deg}°</span>
       </div>
     </div>
+    <div id="probe-radar" style="width:100%;height:200px;margin-bottom:2px"></div>
+    <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-bottom:10px">
+      📊 该点位六维证据强度评分（与风险区雷达图同一套算法，实测数据现算）
+    </div>
     <div class="probe-sec"><div class="ps-title">🛰 风险区归属（影像圈定）</div>${riskHtml}</div>
     <div class="probe-sec"><div class="ps-title">🧱 体素岩性柱（钻孔+物探反演 · 本体语义 · 悬停看工程性质）</div>${lith}</div>
     <div class="probe-sec"><div class="ps-title">📡 物探电阻率（该位置投影桩号）</div>${geo}</div>
     <div class="probe-sec"><div class="ps-title">🔩 最近钻孔（点击定位）</div>${bhs}</div>
+    ${suggest ? `<div class="probe-sec"><div class="ps-title">💡 处置建议（${escapeHtml(d.dominant_type_cn)} · ${d.level}）</div>
+      <ul class="probe-suggest">${suggest}</ul></div>` : ''}
     <div style="font-size:10px;color:var(--text-dim);margin-top:8px;line-height:1.7">
       💡 ${escapeHtml(d.note)}。地图空白处或三维地形上单击任意位置即可探针。
     </div>`;
   // 物探曲线迷你图
   for(const g of d.geophysics) renderProbeRho(g);
-  // 联动绑定
-  $$('.probe-risk').forEach(ch=> ch.addEventListener('click', ()=> selectRisk(ch.dataset.rid)));
-  $$('.probe-bh').forEach(ch=> ch.addEventListener('click', ()=>{
+  // 联动绑定（限定在当前渲染容器内，避免分屏/面板 id 冲突）
+  target.querySelectorAll('.probe-risk').forEach(ch=> ch.addEventListener('click', ()=> selectRisk(ch.dataset.rid)));
+  target.querySelectorAll('.probe-bh').forEach(ch=> ch.addEventListener('click', ()=>{
     const bh = STATE.boreholeCache && STATE.boreholeCache[ch.dataset.bid];
     if(bh && STATE.map){
       STATE.map.setView(xyToLatLng(bh.xy), Math.max(STATE.map.getZoom(), 1));
@@ -880,6 +961,47 @@ function renderProbe(d){
       if(mk) mk.openPopup();
     }
   }));
+}
+
+function renderProbeRadar(d){
+  const el = $('#probe-radar');
+  if(!el || typeof echarts === 'undefined') return;
+  if(_probeRadarChart){ _probeRadarChart.dispose(); _probeRadarChart = null; }
+  _probeRadarChart = echarts.init(el);
+  const dims = d.scores.dims;
+  _probeRadarChart.setOption({
+    tooltip: { trigger:'item', backgroundColor:'rgba(20,29,46,.95)',
+               borderColor:'#ffd080', textStyle:{color:'#dfe7f3',fontSize:11} },
+    radar: {
+      indicator: dims.map(x=>({name:x.name, max:x.max})),
+      shape:'polygon', splitNumber:4,
+      axisName:{color:'#8ea0bd',fontSize:10},
+      splitLine:{lineStyle:{color:'#2c3a55'}},
+      splitArea:{areaStyle:{color:['rgba(255,208,128,.02)','rgba(255,208,128,.05)']}},
+      axisLine:{lineStyle:{color:'#2c3a55'}},
+    },
+    series:[{ type:'radar', symbolSize:5, data:[{
+      value: d.scores.values, name: d.mileage + ' 探针',
+      itemStyle:{color:'#ffd080'}, lineStyle:{width:2.5}, areaStyle:{opacity:.25},
+    }]}],
+  });
+}
+
+// 底部"风险解释"页响应探针点击：与 renderInterpret(r) 对等，
+// 但内容基于探针实测证据现算，而非登记在案的正式风险。
+function renderInterpretProbe(d){
+  const suggest = (d.design_suggestion||[]).join(' ');
+  $('#pane-interpret').innerHTML = `
+    <div class="interp-block">
+      <h3>综合风险解释 — ${d.mileage} 探针点（${escapeHtml(d.dominant_type_cn)}倾向 · ${d.level}）</h3>
+      <p>${escapeHtml(d.interpretation)}</p>
+      <div class="suggestion"><b>设计与施工建议：</b>${escapeHtml(suggest)}</div>
+      <div style="margin-top:10px;font-size:11px;color:var(--text-dim)">
+        本解释由系统基于<strong style="color:var(--accent2)">跨模态时空探针实测证据</strong>现算生成，
+        并非登记在案的正式风险，可作为设计前置排查参考。
+      </div>
+    </div>`;
+  switchTab('interpret');
 }
 
 function renderProbeRho(g){
@@ -1026,6 +1148,7 @@ function highlightAxisRisk(id, on){
 // ============================================================
 async function selectRisk(id){
   STATE.selectedRisk = id;
+  clearProbeMarkers();   // 选中正式风险区时，退出探针的自由点证据链
   // 高亮所有视图
   $$('.risk-label').forEach(()=>{});
   for(const rid in STATE.riskPolygons){
@@ -1128,6 +1251,72 @@ function renderRiskRadar(rid, compareIds){
     }
     _radarChart.setOption(option);
   }).catch(e=> console.warn('radar fetch failed', e));
+}
+
+// 5c) ECharts 特征贡献瀑布图（模型可解释性）
+let _contribChart = null;
+function renderContribution(rid){
+  const el = $('#ev-contribution');
+  if(!el) return;
+  if(_contribChart){ _contribChart.dispose(); _contribChart = null; }
+  getJSON('/api/risk/' + rid + '/contribution').then(d=>{
+    _contribChart = echarts.init(el);
+    const items = d.contributions;   // 已按贡献从高到低排序
+    const names = items.map(c=>c.name);
+    // 瀑布图：用 stacked bar 模拟。placeholder(透明) + 正贡献(红) / 负贡献(绿)
+    const baseline = d.baseline;
+    let acc = baseline;   // 累计游标
+    const placeholder = [], positive = [], negative = [];
+    items.forEach(c=>{
+      const v = c.contribution;
+      if(v >= 0){
+        placeholder.push(acc - baseline);   // 透明垫到当前累计高度
+        positive.push(v);
+        negative.push('-');
+        acc += v;
+      } else {
+        acc += v;   // 负贡献先扣
+        placeholder.push(acc - baseline);
+        positive.push('-');
+        negative.push(-v);
+      }
+    });
+    const totalAbove = acc - baseline;   // 相对基准线的总偏移
+    _contribChart.setOption({
+      title:{ text:'总分 ' + d.total_score + ' · 基准 ' + baseline,
+        left:'center', top:4, textStyle:{fontSize:11, color:'#c8d4ec'} },
+      tooltip:{ trigger:'axis', axisPointer:{type:'shadow'},
+        formatter: params => {
+          const i = params[0].dataIndex;
+          const c = items[i];
+          const sign = c.contribution>=0?'+':'';
+          return `<b>${c.name}</b><br/>得分 ${c.score}（贡献 ${sign}${c.contribution}）<br/><span style="color:#9fb">${c.basis}</span>`;
+        }},
+      grid:{ left:50, right:20, top:36, bottom:42 },
+      xAxis:{ type:'category', data:names, axisLabel:{fontSize:9, color:'#8ea0bd', interval:0, rotate:18},
+        axisLine:{lineStyle:{color:'#3a4a6a'}} },
+      yAxis:{ type:'value', name:'贡献', nameTextStyle:{color:'#8ea0bd', fontSize:9},
+        axisLabel:{color:'#8ea0bd', fontSize:9}, splitLine:{lineStyle:{color:'#2a3a5a'}},
+        axisLine:{show:false} },
+      series:[
+        // 基准线虚线（markLine）
+        { name:'基准', type:'line', data:[], markLine:{
+          silent:true, symbol:'none', lineStyle:{type:'dashed', color:'#9fb', width:1},
+          data:[{yAxis:0, label:{formatter:'基准50', color:'#9fb', fontSize:9}}] }},
+        // 透明垫层
+        { name:'垫层', type:'bar', stack:'wf', itemStyle:{color:'transparent'}, data:placeholder,
+          barWidth:'46%', silent:true },
+        // 正贡献（推高风险，暖色）
+        { name:'推高风险', type:'bar', stack:'wf', data:positive,
+          itemStyle:{color:'#e8704a', borderRadius:[2,2,0,0]}, barWidth:'46%',
+          label:{show:true, position:'top', formatter: p=> p.value==='-'?'':'+'+p.value, fontSize:9, color:'#e8704a'} },
+        // 负贡献（拉低风险，冷色）
+        { name:'拉低风险', type:'bar', stack:'wf', data:negative,
+          itemStyle:{color:'#4a9e7a', borderRadius:[0,0,2,2]}, barWidth:'46%',
+          label:{show:true, position:'bottom', formatter: p=> p.value==='-'?'':p.value, fontSize:9, color:'#4a9e7a'} },
+      ]
+    });
+  }).catch(e=> console.warn('contribution fetch failed', e));
 }
 
 // 对比雷达：在证据面板渲染多风险叠加
@@ -1287,12 +1476,18 @@ function renderEvidence(d){
     <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-bottom:10px">
       📊 多源证据强度雷达图（6 维度，越高越危险）
     </div>
+    <div id="ev-contribution" style="width:100%;height:260px;margin-bottom:6px"></div>
+    <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-bottom:10px">
+      🔍 特征贡献瀑布图（相对基准线 50，正值推高风险）
+    </div>
     <div class="ev-chain">${cards}</div>
     ${params?`<div style="margin-top:12px;font-size:11px;color:var(--text-dim);font-weight:600">关键参数</div>
       <div class="ev-params">${params}</div>`:''}
   `;
   // 渲染雷达图
   renderRiskRadar(r.id);
+  // 渲染特征贡献瀑布图
+  renderContribution(r.id);
 }
 
 function renderCardExtra(ev){
@@ -1688,9 +1883,10 @@ function bindEvents(){
     });
   });
 
-  // ESC 退出全屏
+  // ESC 退出全屏 / 分屏
   document.addEventListener('keydown', e=>{
     if(e.key==='Escape'){
+      if(STATE.splitActive){ toggleSplitView(false); return; }
       const act = document.querySelector('.fs-active');
       if(act){
         act.classList.remove('fs-active');
@@ -1700,12 +1896,61 @@ function bindEvents(){
     }
   });
 
+  // 分屏联动按钮
+  $('#btn-splitview').addEventListener('click', ()=>{
+    toggleSplitView(!STATE.splitActive);
+  });
+  $('#btn-exit-split').addEventListener('click', ()=> toggleSplitView(false));
+
   // 窗口自适应：集中重排地图 / 3D / 图表
   let _rzT = null;
   window.addEventListener('resize', ()=>{
     clearTimeout(_rzT);
     _rzT = setTimeout(relayout, 80);
   });
+}
+
+// ============================================================
+// 分屏联动模式：三维(左) + 探针(右) 全屏对照
+// ============================================================
+function toggleSplitView(on){
+  STATE.splitActive = on;
+  const overlay = $('#split-overlay');
+  const btn = $('#btn-splitview');
+  const slot = $('#split-three-slot');
+  const evSlot = $('#split-evidence-slot');
+  const threeC = $('#three-container');
+  if(on){
+    // 左栏：三维容器 + 工具栏 + 图层开关（WebGL canvas 只能移动不能复制）
+    slot.appendChild(threeC);
+    const tb = document.querySelector('.three-toolbar');
+    const ly = document.querySelector('.three-layers');
+    if(tb) slot.appendChild(tb);
+    if(ly) slot.appendChild(ly);
+    // 右栏：整个证据链面板（含雷达图/瀑布图/证据卡片/探针结果）
+    const ep = document.querySelector('.evidence-panel');
+    if(ep) evSlot.appendChild(ep);
+    overlay.classList.add('active');
+    btn.classList.add('active');
+    btn.textContent = '✓ 分屏中';
+  } else {
+    // 三维相关 DOM 移回原面板（固定顺序 append，避免 nextSibling 错乱）
+    const tPanel = document.querySelector('.three-panel');
+    const tb = document.querySelector('.three-toolbar');
+    const ly = document.querySelector('.three-layers');
+    tPanel.appendChild(threeC);
+    if(tb) tPanel.appendChild(tb);
+    if(ly) tPanel.appendChild(ly);
+    // 证据面板移回 workspace（在 three-panel 之后）
+    const ws = document.querySelector('.workspace');
+    const ep = document.querySelector('.evidence-panel');
+    if(ep && ws) ws.appendChild(ep);
+    overlay.classList.remove('active');
+    btn.classList.remove('active');
+    btn.textContent = '⊠ 分屏联动';
+  }
+  // 移动后 canvas 尺寸变化，必须触发 Three.js + 地图 resize
+  setTimeout(relayout, 60);
 }
 
 // 重排所有可视化（窗口缩放 / 全屏切换后调用）

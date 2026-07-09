@@ -4,12 +4,14 @@
 ====================================
 完全离线运行，无需外部 API / 大模型，保证比赛现场断网可用。
 
-提供四个核心能力：
+提供六个核心能力：
   1) RAG 检索 —— 把报告/风险/钻孔文本切成语料，TF-IDF 向量化，召回相关片段
-  2) 意图识别 —— 把用户问题归类为 locate(定位) / query(条件查询) /
-                  compare(对比) / explain(解释) / report(报告) / greet(问候)
+  2) 意图识别 —— 把用户问题归类为 locate/query/compare/explain/report/
+                  greet/score/probe 八类意图
   3) 参数抽取 —— 从问题里抽出风险 ID、里程、阈值（坡度>X、水位<Y）等
   4) 对话状态 —— 维护最近提到的风险对象，支持指代消解（"它"/"这个"指代）
+  5) 评分解释 —— 把多维风险评分逐维度拆解成可解释文字（模型可解释性入口）
+  6) 跨模态探针 —— 对话式查询任意位置的全部模态数据（地形/岩性/钻孔/物探/风险）
 
 设计原则：规则 + 检索混合。工程上可解释、可追溯，回答都带证据来源。
 """
@@ -105,6 +107,10 @@ INTENT_PATTERNS = [
     ("greet",     r"^(你好|您好|hi|hello|嗨|在吗|你是谁|能做什么|帮助|功能)"),
     ("report",    r"(生成|写|出|做).*(报告|说明|文档|分析)"),
     ("compare",   r"(对比|比较|区别|哪个.*高|哪个.*大|哪个.*严重|vs|VS|和.*比)"),
+    # 评分解释：为什么是高风险/评分依据/凭什么定级
+    ("score",     r"(为什么.*高风险|为什么.*风险.*高|评分|打分|得分|依据|凭什么|怎么.*定级|定级依据|雷达图.*分|各.*维度|维度.*分)"),
+    # 跨模态探针：某位置的地质/数据情况（"这里地质怎么样/挖隧道稳不稳/有什么数据"）
+    ("probe",     r"(地质.*怎么样|地质.*如何|情况.*怎么样|情况如何|稳不稳|能不能.*挖|能不能.*建|适不适用|有什么.*数据|各.*模态|探针|这个位置|这一带|此处.*地质|K12\+?\d{3}.*地质|K12\+?\d{3}.*情况)"),
     # 纯条件查询优先级最高（避免被 explain 的关键词抢走）
     ("query",     r"(坡度.*(大于|超过|>|≥|高于)|水位.*(小于|低于|浅|<|≤)|电阻率.*(小于|低于|<|大于|超过)|RQD|有哪些|列出|统计|全部.*风险)"),
     ("query",     r"K12\+?\d{3}.*(之间|到|至|范围|~)"),     # 里程范围查询
@@ -292,7 +298,7 @@ def generate_response(text: str, sid: str = "default") -> Dict[str, Any]:
     # ---------- greet ----------
     if intent == "greet":
         ans = (
-            "您好！我是**多源勘察数据联动展示与证据链追溯系统**的智能助手。\n\n"
+            "您好！我是**多源勘察数据智能融合与风险评估平台**的智能助手。\n\n"
             "我能帮您：\n"
             "- 🗺️ **定位风险**：「带我去看看 K12+380 的边坡」\n"
             "- 🔍 **条件查询**：「坡度大于 30 度的风险有哪些」「地下水位浅于 3 米的钻孔」\n"
@@ -352,6 +358,24 @@ def generate_response(text: str, sid: str = "default") -> Dict[str, Any]:
         else:
             ans = "请指定要对比的两个风险，例如「R001 和 R002 哪个风险更高」。"
 
+    # ---------- score（评分依据解释）----------
+    elif intent == "score":
+        if rid and RISK_BY_ID.get(rid):
+            ans, score_refs = _explain_score(rid)
+            refs.extend(score_refs)
+            actions.append({"type": "locate_risk", "risk_id": rid})
+        else:
+            ans = ("请问要解释哪个风险的评分？例如「R001 为什么是高风险」"
+                   "或「K12+720 的评分依据是什么」。")
+
+    # ---------- probe（跨模态位置探针）----------
+    elif intent == "probe":
+        ans, probe_refs = _probe_answer(text, rid)
+        refs.extend(probe_refs)
+        # 若关联到具体风险，同步定位
+        if rid and RISK_BY_ID.get(rid):
+            actions.append({"type": "locate_risk", "risk_id": rid})
+
     # ---------- query ----------
     elif intent == "query":
         th = extract_thresholds(text)
@@ -406,8 +430,131 @@ def generate_response(text: str, sid: str = "default") -> Dict[str, Any]:
 
 
 # ----------------------------------------------------------------------------
-# 辅助：对比 / RAG 回答 / 通用统计
+# 辅助：对比 / RAG 回答 / 评分解释 / 探针回答 / 通用统计
 # ----------------------------------------------------------------------------
+
+# 评分维度中文名（与 analytics_service.DIMS 一致）
+_SCORE_DIMS = [
+    ("slope", "地形坡度", 100),
+    ("relief", "高差起伏", 100),
+    ("geophysics", "物探异常", 100),
+    ("borehole", "钻孔揭露", 100),
+    ("groundwater", "地下水", 100),
+    ("level", "综合等级", 100),
+]
+
+
+def _explain_score(rid: str) -> Tuple[str, List[Dict]]:
+    """把风险的多维评分拆解成可解释的文字（评分依据）。
+
+    复用 analytics_service._score_risk 的公式，但输出逐维度文字说明 +
+    主导因素，让用户理解"为什么是高风险"。这是"模型可解释性"的对话入口。
+    """
+    r = RISK_BY_ID.get(rid)
+    if not r:
+        return "未找到该风险对象。", []
+    p = r["evidence"].get("params", {})
+    slope = p.get("max_slope_deg", p.get("avg_slope_deg", 15))
+    relief = p.get("relief_m", 10)
+    rho = p.get("rho_min", 1000)
+    weathered = p.get("weathered_depth_m", p.get("deposit_depth_m", 5))
+    rqd = p.get("rqd_pct", 80)
+    wd = p.get("water_depth_m")
+    scores = {
+        "slope": min(100, round(slope / 45 * 100)),
+        "relief": min(100, round(relief / 60 * 100)),
+        "geophysics": max(0, min(100, round((1000 - rho) / 900 * 100))),
+        "borehole": min(100, round(weathered / 15 * 70 + (100 - rqd) / 100 * 30)),
+        "groundwater": (max(20, min(100, round((10 - wd) / 10 * 100)))
+                        if wd is not None else 40),
+        "level": {"高": 90, "中高": 70, "中": 50}.get(r["risk_level"], 50),
+    }
+    total = round(sum(scores.values()) / len(scores))
+    # 主导因素（得分最高的两个维度）
+    ranked = sorted(scores.items(), key=lambda x: -x[1])[:2]
+    lines = [f"### {r['name']}（{r['mileage']}）评分依据", "",
+             f"**综合均分 {total}/100　风险等级：{r['risk_level']}**", "",
+             "| 评分维度 | 得分 | 主要依据 |",
+             "|---|---|---|"]
+    # 每个维度配一句依据
+    evidence_text = {
+        "slope": f"最大坡度 {slope}°",
+        "relief": f"高差起伏 {relief}m",
+        "geophysics": f"最低电阻率 {rho}Ω·m（越低越异常）",
+        "borehole": f"风化/堆积深度 {weathered}m，RQD={rqd}%" if rqd else f"风化/堆积深度 {weathered}m",
+        "groundwater": f"地下水位埋深 {wd}m" if wd is not None else "未测到地下水",
+        "level": f"定性等级 {r['risk_level']}",
+    }
+    for key, name, _ in _SCORE_DIMS:
+        lines.append(f"| {name} | **{scores[key]}** | {evidence_text[key]} |")
+    lines.append("")
+    _dim_name = {k: name for k, name, _ in _SCORE_DIMS}
+    lines.append(f"**主导因素**：{_dim_name[ranked[0][0]]}（{ranked[0][1]}分）"
+                 f"、{_dim_name[ranked[1][0]]}（{ranked[1][1]}分）"
+                 "是拉高该风险评分的主要维度。")
+    lines.append("\n> 评分采用六维加权模型，各维度 0-100，综合均分对应定性等级。"
+                 "下方雷达图可直观对比各维度强弱。")
+    return "\n".join(lines), [{"risk_id": rid, "title": r["name"]}]
+
+
+def _probe_answer(text: str, rid: Optional[str]) -> Tuple[str, List[Dict]]:
+    """跨模态探针的对话入口：把任意位置的全部模态信息组织成自然语言。
+
+    从用户文本抽里程坐标 → 调 fusion_probe → 文字化呈现。
+    让"问位置"变成"问出该位置的所有数据"，是多源融合的对话体现。
+    """
+    import math
+    import fusion_probe
+    # 抽坐标：优先 K12+xxx，否则用上下文风险中心
+    x = None
+    m = re.search(r"K12\+?(\d{3})", text, flags=re.IGNORECASE)
+    if m:
+        x = int(m.group(1))
+    if x is None and rid and RISK_BY_ID.get(rid):
+        x = RISK_BY_ID[rid]["center_xy"][0]
+    if x is None:
+        return ("请问您想查询哪个位置？例如「K12+720 这个位置地质怎么样」"
+                "或「K12+380 有什么数据」。"), []
+    # Y 坐标跟随线路中线（与 structures3d._route_y 一致）
+    y = 400.0 + 30.0 * math.sin(2 * math.pi * x / 900.0)
+    d = fusion_probe.probe(x, y)
+    lines = [f"### 📍 {d['mileage']} 跨模态探针结果", ""]
+    # 地形
+    lines.append(f"**地形**：地表高程 {d['terrain']['surface_z']}m，坡度 {d['terrain']['slope_deg']}°")
+    # 岩性柱
+    col = d.get("lithology_column", [])
+    if col:
+        col_str = " → ".join(f"{s['name_cn']}({s['top_z']}~{s['bottom_z']}m)"
+                             for s in col[:4])
+        lines.append(f"**岩性柱**（自上而下）：{col_str}")
+    # 钻孔
+    bhs = d.get("boreholes", [])
+    if bhs:
+        lines.append(f"**最近钻孔**：" + "、".join(
+            f"{b['id']}(距{b['distance_m']}m，孔深{b['depth_m']}m)" for b in bhs[:2]))
+    # 物探
+    geos = d.get("geophysics", [])
+    if geos:
+        lines.append(f"**物探覆盖**：" + "、".join(
+            f"{g['id']}({g['name']}，距{g['distance_m']}m，最低ρ={g['rho_min']}Ω·m)" for g in geos))
+    else:
+        lines.append("**物探覆盖**：该位置附近无物探测线覆盖")
+    # 风险
+    inside = d.get("risk_inside", [])
+    if inside:
+        lines.append(f"**所在风险区**：" + "、".join(
+            f"{r['mileage']} {r['type_cn']}({r['risk_level']})" for r in inside))
+    else:
+        near = d.get("risk_nearest")
+        lines.append(f"**风险区**：不在任何风险区内，最近的是 "
+                     f"{near['mileage']} {near['type_cn']}（距{near['distance_m']}m）")
+    lines.append("")
+    lines.append("> 以上信息由统一工程坐标系下的跨模态探针实时关联，"
+                 "岩性来自钻孔插值反演的体素模型，物探来自高密度电法剖面。")
+    refs = [{"risk_id": r["id"], "title": r["type_cn"]} for r in inside]
+    return "\n".join(lines), refs
+
+
 def _compare_risks(ids: List[str]) -> Tuple[str, List[Dict]]:
     r1, r2 = RISK_BY_ID[ids[0]], RISK_BY_ID[ids[1]]
     level_rank = {"高": 3, "中高": 2, "中": 1}
@@ -488,6 +635,12 @@ if __name__ == "__main__":
         "给 R001 生成一份报告",
         "那它的截排水怎么设计",   # 指代 R001
         "K12+300 到 K12+800 之间有什么风险",
+        # 新增：评分解释
+        "R001 为什么是高风险",
+        "K12+720 的评分依据是什么",
+        # 新增：跨模态探针
+        "K12+720 这个位置地质怎么样",
+        "K12+380 有什么数据",
     ]
     print("=" * 60)
     print("NLU 引擎自测")

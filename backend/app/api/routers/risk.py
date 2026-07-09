@@ -24,3 +24,10 @@ def risk_scores(rid: Optional[str] = None,
                 svc: AnalyticsService = Depends(get_analytics_service)):
     """风险多维评分，供 ECharts 雷达图。"""
     return svc.risk_scores(rid)
+
+
+@router.get("/api/risk/{rid}/contribution")
+def risk_contribution(rid: str,
+                      svc: AnalyticsService = Depends(get_analytics_service)):
+    """风险评分特征贡献分解，供 ECharts 瀑布图（模型可解释性）。"""
+    return svc.risk_contribution(rid)

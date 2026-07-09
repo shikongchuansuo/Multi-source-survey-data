@@ -36,8 +36,22 @@
         <option value="中">中</option>
       </select>
     </div>
+    <button id="btn-splitview" class="topbar-btn" title="三维 + 探针 分屏联动">⊠ 分屏联动</button>
   </div>
 </header>
+
+<!-- 分屏联动覆盖层（激活时把三维移入左栏，整个证据链面板移入右栏） -->
+<div id="split-overlay" class="split-overlay">
+  <div class="split-left">
+    <div class="split-head"><span>🏔️ 三维点云 / 地形（点击任一位置联动证据链）</span>
+      <button id="btn-exit-split" class="topbar-btn active">✕ 退出分屏</button>
+    </div>
+    <div id="split-three-slot"></div>
+  </div>
+  <div class="split-right">
+    <div id="split-evidence-slot"></div>
+  </div>
+</div>
 
 <!-- 主工作区 -->
 <div class="workspace">

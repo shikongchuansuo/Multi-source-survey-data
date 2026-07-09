@@ -90,86 +90,8 @@ def collect_full_context() -> Dict[str, Any]:
 # #############################################################################
 #  B0. 处置建议规则引擎 —— 按 type + risk_level 动态生成，无硬编码里程
 # #############################################################################
-# 每种风险类型一套处置策略；每条策略内按 risk_level 给出差异化措辞。
-# 里程/类型等具体值在调用时从风险对象取，避免写死在源码里。
-# 新增风险类型时只需在此表追加一项。
-_RECOMMEND_RULES: Dict[str, Dict[str, Any]] = {
-    "slope_instability": {
-        "title": "洞口边坡失稳",
-        "by_level": {
-            "高": [
-                "进洞前必须完成边坡处治：长管棚超前支护 + 锚网喷 + 截排水天沟，坡脚设抗滑桩。",
-                "超前地质预报全程跟进：TSP + 地质雷达 + 超前钻孔，确认松动岩体范围。",
-                "建立坡体位移监测，变形速率预警值按 {weathered_depth_m}m 风化层深度动态核定。",
-            ],
-            "中高": [
-                "洞口段加强支护：管棚 + 锚网喷，跟进截排水措施。",
-                "施工期坡体位移监测，动态调整支护参数。",
-            ],
-            "中": [
-                "常规锚网喷支护，做好截排水。",
-                "施工期位移监测。",
-            ],
-        },
-    },
-    "water_rich_fracture": {
-        "title": "富水破碎带",
-        "by_level": {
-            "高": [
-                "超前帷幕注浆 (加固圈 ≥5m) + 双层初期支护，预留注浆管。",
-                "备用抽排水能力 ≥200m³/h，富水段设置防水闸门。",
-                "超前预报锁定破碎带宽度 (现估 {fracture_width_m}m) 与渗透性。",
-            ],
-            "中高": [
-                "超前帷幕注浆 + 双层初期支护，预留注浆管。",
-                "施工配备抽排水能力 ≥200m³/h，设置防水闸门。",
-                "超前地质预报 (TSP + 地质雷达 + 超前钻孔) 锁定破碎带宽度 (现估 {fracture_width_m}m)。",
-            ],
-            "中": [
-                "加强初期支护，做好排水预案。",
-                "超前预报确认富水性。",
-            ],
-        },
-    },
-    "loose_deposit": {
-        "title": "松散堆积",
-        "by_level": {
-            "高": [
-                "明洞基础换填碎石，钻孔灌注桩嵌岩穿过堆积层 (现估 {deposit_depth_m}m)。",
-                "基础沉降监测，控制桩间距与嵌岩深度。",
-                "做好地表截排水，防止堆积层进一步软化。",
-            ],
-            "中高": [
-                "基础换填 + 灌注桩嵌岩，穿过堆积层 (现估 {deposit_depth_m}m)。",
-                "基础沉降监测。",
-            ],
-            "中": [
-                "基础换填处理，控制沉降。",
-                "施工期沉降监测。",
-            ],
-        },
-    },
-}
-# 兜底策略：未登记类型按等级给通用建议
-_RECOMMEND_FALLBACK: Dict[str, List[str]] = {
-    "高": ["进洞前完成专项处治；超前地质预报全程跟进；监控量测体系到位。"],
-    "中高": ["加强支护与超前预报；施工期监控量测。"],
-    "中": ["按常规措施处理；施工期监测。"],
-}
-
-# 优先级排序：高风险优先处置（与 LEVEL_RANK 一致）
-_PRIORITY_ORDER = ["高", "中高", "中"]
-
-
-def _fmt_bullets(bullets: List[str], params: Dict[str, Any]) -> List[str]:
-    """用 evidence.params 填充建议里的 {占位符}，缺失占位符原样保留。"""
-    out = []
-    for b in bullets:
-        try:
-            out.append(b.format(**params) if params else b)
-        except (KeyError, IndexError):
-            out.append(b)
-    return out
+# 规则表已抽到 disposal_rules.py，供报告生成与跨模态探针(fusion_probe.py)共用。
+import disposal_rules
 
 
 def build_recommendations(risks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -185,21 +107,19 @@ def build_recommendations(risks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "priority": 0,   # 数字越小优先级越高
         }, ...]
     """
-    ranked = sorted(risks, key=lambda r: (_PRIORITY_ORDER.index(r["risk_level"])
-                                          if r["risk_level"] in _PRIORITY_ORDER else 99,
+    ranked = sorted(risks, key=lambda r: (disposal_rules.PRIORITY_ORDER.index(r["risk_level"])
+                                          if r["risk_level"] in disposal_rules.PRIORITY_ORDER else 99,
                                           r.get("mileage_m", 0)))
     out = []
     for i, r in enumerate(ranked):
-        rule = _RECOMMEND_RULES.get(r["type"], {})
-        bullets = rule.get("by_level", {}).get(r["risk_level"]) or _RECOMMEND_FALLBACK.get(
-            r["risk_level"], _RECOMMEND_FALLBACK["中"])
+        rule = disposal_rules.RULES.get(r["type"], {})
         params = r.get("evidence", {}).get("params", {})
         title_prefix = rule.get("title", r.get("type_cn", r["type"]))
         out.append({
             "risk": r,
             "title": f"{r['mileage']} {title_prefix}",
             "level_label": (r["risk_level"] + "（首要风险）") if i == 0 else r["risk_level"],
-            "bullets": _fmt_bullets(bullets, params),
+            "bullets": disposal_rules.bullets_for(r["type"], r["risk_level"], params),
             "priority": i,
         })
     return out

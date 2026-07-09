@@ -268,7 +268,7 @@ def _build_demo_voxels():
         vox, surf, zc, xc, yc, dx, dy, dz)
 
     return {
-        "source": "inverted",   # 由真实钻孔+物探反演，而非预设演示数据
+        "source": "interpolated",   # 由真实钻孔插值+物探约束反演，而非预设演示
         "shape": [nx, ny, nz],
         "spacing_m": [dx, dy, dz],
         "origin_xyz": origin,

@@ -110,6 +110,55 @@ class AnalyticsService:
             })
         return {"dimensions": DIMS, "risks": series}
 
+    # ---- 风险评分特征贡献分解（瀑布图数据）----
+    def risk_contribution(self, rid: str) -> Dict[str, Any]:
+        """把风险总分分解到各维度，输出特征贡献瀑布图所需结构化数据。
+
+        每个维度给出：得分、相对基准线(50分)的贡献、原始参数依据文字。
+        这是"模型可解释性"的数据接口，前端画成瀑布图，NLU 的评分解释共用同一逻辑。
+        """
+        r = self.risk_repo.risk_by_id(rid)
+        if not r:
+            raise NotFoundError(f"风险 {rid} 不存在")
+        s = _score_risk(r)
+        p = r["evidence"].get("params", {})
+        # 每个维度的原始依据文字（与 nlu._explain_score 保持一致）
+        basis = {
+            "slope": f"最大坡度 {p.get('max_slope_deg', p.get('avg_slope_deg', '—'))}°",
+            "relief": f"高差起伏 {p.get('relief_m', '—')}m",
+            "geophysics": f"最低电阻率 {p.get('rho_min', '—')}Ω·m",
+            "borehole": (f"风化/堆积深度 {p.get('weathered_depth_m', p.get('deposit_depth_m', '—'))}m"
+                         + (f"，RQD={rqd}%" if (rqd := p.get('rqd_pct')) else "")),
+            "groundwater": (f"地下水位埋深 {p['water_depth_m']}m"
+                            if p.get("water_depth_m") is not None else "未测到地下水"),
+            "level": f"定性等级 {r['risk_level']}",
+        }
+        BASELINE = 50   # 基准线：50分（中等）
+        # 维度顺序：DIMS 是 [{"name","max"},...]，key 来自 _score_risk 的字段名
+        _DIM_KEYS = ["slope", "relief", "geophysics", "borehole", "groundwater", "level"]
+        items = []
+        for dim, key in zip(DIMS, _DIM_KEYS):
+            score = s[key]
+            items.append({
+                "key": key, "name": dim["name"],
+                "score": score,
+                "contribution": score - BASELINE,   # 正=推高风险，负=拉低
+                "basis": basis.get(key, ""),
+            })
+        total = round(sum(s.values()) / len(s))
+        items.sort(key=lambda x: -x["contribution"])   # 贡献从高到低
+        return {
+            "risk_id": rid,
+            "risk_name": r["name"],
+            "mileage": r["mileage"],
+            "level": r["risk_level"],
+            "baseline": BASELINE,
+            "total_score": total,
+            "contributions": items,
+            "note": "贡献 = 维度得分 - 基准线(50)；正值推高风险，负值拉低。"
+                    "基准线 50 代表中等风险水平。",
+        }
+
     # ---- 三维地质结构 ----
     def get_3d_structures(self) -> Dict[str, Any]:
         return self._cached("3d_structures", structures3d_engine.build_3d_structures)

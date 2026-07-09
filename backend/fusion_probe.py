@@ -19,12 +19,24 @@ import os
 
 import numpy as np
 
+import disposal_rules
 import ontology
 import structures3d
 import voxel_model
 
 # ---- 体素模型缓存（探针高频调用，避免重复反演）----
 _VOX_CACHE = None
+
+# 六维评分维度：与 analytics_service.DIMS 保持同名同序，
+# 使探针点位与正式风险区在雷达图上视觉可比（各自独立求值，engines 间不互相 import）。
+DIMS = [
+    {"name": "地形坡度", "max": 100},
+    {"name": "高差起伏", "max": 100},
+    {"name": "物探异常", "max": 100},
+    {"name": "钻孔揭露", "max": 100},
+    {"name": "地下水", "max": 100},
+    {"name": "综合等级", "max": 100},
+]
 
 
 def _voxel():
@@ -183,19 +195,120 @@ def _risks_at(x, y):
     return inside, nearest
 
 
+def _relief_m(x, y, radius=40.0, n=5):
+    """点位邻域地形起伏（NxN 网格采样窗口内最大-最小高程）。"""
+    e = structures3d._elev_at
+    zs = []
+    for i in range(n):
+        for j in range(n):
+            dx = (i / (n - 1) - 0.5) * 2 * radius
+            dy = (j / (n - 1) - 0.5) * 2 * radius
+            zs.append(e(min(1000.0, max(0.0, x + dx)), min(800.0, max(0.0, y + dy))))
+    return max(zs) - min(zs)
+
+
+def _layer_thickness(lith, codes):
+    """岩性柱中指定 code 集合的累计厚度（米）。"""
+    return sum(s["top_z"] - s["bottom_z"] for s in lith if s["code"] in codes)
+
+
+def _weathered_depth(lith):
+    """风化层(全/强风化, 本体 weathering_grade in W3/W4)累计厚度。"""
+    codes = {c["code"] for c in ontology.lithology_concepts()
+              if c.get("weathering_grade") in ("W3", "W4")}
+    return _layer_thickness(lith, codes)
+
+
+def _score_point(slope_deg, relief_m, rho_min, weathered_m, has_fracture):
+    """六维评分：与 analytics_service._score_risk 同一套公式，
+    用探针实测的真实证据(坡度/起伏/电阻率/风化厚度)代入，使探针点位
+    获得与正式风险区同等量纲、可直接比较的量化画像。
+    """
+    slope_score = min(100, round(slope_deg / 45 * 100))
+    relief_score = min(100, round(relief_m / 60 * 100))
+    rho = rho_min if rho_min is not None else 1000
+    geo_score = max(0, min(100, round((1000 - rho) / 900 * 100)))
+    bh_score = min(100, round(weathered_m / 15 * 70 + (100 - 80) / 100 * 30))
+    water_score = 70 if has_fracture else 40
+    avg = (slope_score + relief_score + geo_score + bh_score + water_score) / 5
+    level = "高" if avg >= 65 else ("中高" if avg >= 45 else "中")
+    level_score = {"高": 90, "中高": 70, "中": 50}[level]
+    scores = {"slope": slope_score, "relief": relief_score, "geophysics": geo_score,
+              "borehole": bh_score, "groundwater": water_score, "level": level_score}
+    return scores, level
+
+
+def _dominant_type(scores):
+    """按三种风险机制(边坡/富水破碎/松散堆积)对应评分取最高者，
+    推断该点位的主导风险类型 —— 用于复用 disposal_rules 的处置建议文本。
+    """
+    cand = {"slope_instability": scores["slope"],
+            "water_rich_fracture": scores["geophysics"],
+            "loose_deposit": scores["borehole"]}
+    return max(cand, key=cand.get)
+
+
+def _interpret_text(mileage, slope_deg, relief_m, lith, geo, boreholes,
+                     risk_inside, risk_nearest, weathered_m):
+    """基于该点真实证据拼接的自然语言解读（风格对齐正式风险区的 interpretation 字段）。"""
+    parts = [f"{mileage} 位置地表坡度 {slope_deg:.1f}°，邻域地形起伏约 {relief_m:.0f}m。"]
+    if lith:
+        top = lith[0]
+        parts.append(
+            f"体素岩性柱（钻孔+物探反演）显示表层为{top['name_cn']}"
+            f"（围岩{top.get('surrounding_rock_class') or '—'}），风化层累计厚度约 {weathered_m:.0f}m。")
+    if geo:
+        g0 = geo[0]
+        anomaly = "，存在低阻异常，指示富水或破碎发育" if g0["rho_min"] < 200 else "，未见明显低阻异常"
+        parts.append(f"最近物探测线 {g0['id']}（垂距{g0['distance_m']}m）实测最低电阻率 {g0['rho_min']}Ω·m{anomaly}。")
+    if boreholes:
+        b0 = boreholes[0]
+        parts.append(f"最近钻孔 {b0['id']} 距此 {b0['distance_m']}m（孔深{b0['depth_m']}m），可作为该点地层验证依据。")
+    if risk_inside:
+        parts.append(f"该点落入已圈定风险区：{'、'.join(r['type_cn'] for r in risk_inside)}。")
+    elif risk_nearest:
+        parts.append(f"该点未落入已圈定风险区，距最近风险区（{risk_nearest['type_cn']}）约 {risk_nearest['distance_m']}m。")
+    return "".join(parts)
+
+
 def probe(x, y):
-    """跨模态时空探针主入口。x,y 为工程坐标（米）。"""
+    """跨模态时空探针主入口。x,y 为工程坐标（米）。
+
+    与正式风险区(selectRisk)对等的全链路联动入口：不仅检索各模态实例数据，
+    还基于真实证据现算六维评分(与风险雷达图同一套公式)、推断主导风险机制、
+    生成文字解读 + 处置建议(复用 disposal_rules，与报告生成同源)，
+    供前端一次性驱动 3D 定位/里程轴/雷达图/风险解释面板等全部联动视图。
+    """
     x = max(0.0, min(1000.0, float(x)))
     y = max(0.0, min(800.0, float(y)))
     surf = structures3d._elev_at(x, y)
+    slope_deg = _slope_deg(x, y)
+    relief_m = _relief_m(x, y)
     inside, nearest = _risks_at(x, y)
+    lith = _lithology_column(x, y)
+    geo = _geophysics_at(x, y)
+    boreholes = _nearest_boreholes(x, y)
     _, vox_meta = _voxel()
+
+    weathered_m = _weathered_depth(lith)
+    fracture_m = _layer_thickness(lith, {5})
+    deposit_m = _layer_thickness(lith, {0})
+    rho_min = geo[0]["rho_min"] if geo else None
+    scores, level = _score_point(slope_deg, relief_m, rho_min, weathered_m, fracture_m > 0)
+    dom_type = _dominant_type(scores)
+    dom_info = ontology.risk_type_info(dom_type) or {}
+    params = {"max_slope_deg": round(slope_deg, 1), "relief_m": round(relief_m, 1),
+              "weathered_depth_m": round(weathered_m, 1), "fracture_width_m": round(fracture_m, 1),
+              "deposit_depth_m": round(deposit_m, 1)}
+    mileage = _mileage_label(x)
+
     return {
         "x": round(x, 1), "y": round(y, 1),
-        "mileage": _mileage_label(x),
+        "mileage": mileage,
         "terrain": {
             "surface_z": round(surf, 1),
-            "slope_deg": round(_slope_deg(x, y), 1),
+            "slope_deg": round(slope_deg, 1),
+            "relief_m": round(relief_m, 1),
             "source": "DEM/三维点云（同源地形）",
         },
         "orthophoto": {
@@ -203,13 +316,23 @@ def probe(x, y):
             "u": round(x / 1000.0, 4),
             "v": round(1.0 - y / 800.0, 4),
         },
-        "lithology_column": _lithology_column(x, y),
+        "lithology_column": lith,
         "voxel_source": vox_meta.get("source"),
-        "boreholes": _nearest_boreholes(x, y),
-        "geophysics": _geophysics_at(x, y),
+        "boreholes": boreholes,
+        "geophysics": geo,
         "risk_inside": inside,
         "risk_nearest": nearest,
-        "note": "统一工程坐标系为时空一致性基准；岩性语义来自领域本体",
+        # ---- 全链路联动新增字段 ----
+        "scores": {"dims": DIMS,
+                   "values": [scores["slope"], scores["relief"], scores["geophysics"],
+                              scores["borehole"], scores["groundwater"], scores["level"]]},
+        "level": level,
+        "dominant_type": dom_type,
+        "dominant_type_cn": dom_info.get("name_cn", dom_type),
+        "interpretation": _interpret_text(mileage, slope_deg, relief_m, lith, geo, boreholes,
+                                           inside, nearest, weathered_m),
+        "design_suggestion": disposal_rules.bullets_for(dom_type, level, params),
+        "note": "统一工程坐标系为时空一致性基准；岩性语义来自领域本体；评分/建议与正式风险区同一套算法",
     }
 
 
